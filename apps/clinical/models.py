@@ -60,7 +60,7 @@ class SessionNote(BaseModel):
     )
     client = models.ForeignKey(
         'clients.Client',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of clinical records
         related_name='session_notes',
     )
     provider = models.ForeignKey(
@@ -111,7 +111,7 @@ class TreatmentPlan(BaseModel):
     """Treatment plan with goals for a client."""
     client = models.ForeignKey(
         'clients.Client',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of treatment plans
         related_name='treatment_plans',
     )
     provider = models.ForeignKey(
@@ -139,7 +139,7 @@ class Document(BaseModel):
     """
     client = models.ForeignKey(
         'clients.Client',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of documents
         related_name='documents',
     )
     uploaded_by = models.ForeignKey(

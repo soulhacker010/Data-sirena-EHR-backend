@@ -70,6 +70,23 @@ class AuditMiddleware(MiddlewareMixin):
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
 
+            # FIX PII-1: Mask sensitive fields before storing in audit log.
+            # This prevents passwords, SSNs, and other PII from being stored
+            # in plaintext audit records.
+            if changes and isinstance(changes, dict):
+                SENSITIVE_KEYS = {
+                    'password', 'password1', 'password2', 'old_password',
+                    'new_password', 'confirm_password',
+                    'ssn', 'social_security', 'social_security_number',
+                    'date_of_birth', 'dob',
+                    'credit_card', 'card_number', 'cvv', 'cvc',
+                    'token', 'secret', 'api_key', 'refresh',
+                }
+                changes = {
+                    k: '***REDACTED***' if k.lower() in SENSITIVE_KEYS else v
+                    for k, v in changes.items()
+                }
+
             # Extract table/record info from the URL path
             path_parts = [p for p in request.path.split('/') if p]
 

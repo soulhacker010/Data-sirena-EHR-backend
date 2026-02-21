@@ -225,9 +225,15 @@ class ClaimCreateSerializer(serializers.ModelSerializer):
 
 class PostClaimPaymentSerializer(serializers.Serializer):
     """For posting a payment against a claim — matches PostClaimPaymentPayload."""
-    insurance_paid = serializers.DecimalField(max_digits=10, decimal_places=2, default=0)
-    patient_responsibility = serializers.DecimalField(max_digits=10, decimal_places=2, default=0)
-    write_off_amount = serializers.DecimalField(max_digits=10, decimal_places=2, default=0)
+    insurance_paid = serializers.DecimalField(
+        max_digits=10, decimal_places=2, default=0, min_value=Decimal('0'),
+    )
+    patient_responsibility = serializers.DecimalField(
+        max_digits=10, decimal_places=2, default=0, min_value=Decimal('0'),
+    )
+    write_off_amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, default=0, min_value=Decimal('0'),
+    )
     reference_number = serializers.CharField(required=False, default='')
     notes = serializers.CharField(required=False, default='')
 
@@ -252,4 +258,6 @@ class BatchInvoiceSerializer(serializers.Serializer):
 class StripePaymentSerializer(serializers.Serializer):
     """For creating Stripe payment intents — matches StripePaymentPayload."""
     invoice_id = serializers.UUIDField()
-    amount = serializers.DecimalField(max_digits=10, decimal_places=2)
+    amount = serializers.DecimalField(
+        max_digits=10, decimal_places=2, min_value=Decimal('0.50'),
+    )  # Stripe minimum is $0.50

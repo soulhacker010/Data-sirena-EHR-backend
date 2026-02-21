@@ -12,7 +12,7 @@ class Invoice(OrganizationModel):
     """Invoice for billed services."""
     client = models.ForeignKey(
         'clients.Client',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of billing records
         related_name='invoices',
     )
     invoice_number = models.CharField(max_length=100, unique=True)

@@ -73,6 +73,17 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             return AppointmentCreateSerializer
         return AppointmentSerializer
 
+    def create(self, request, *args, **kwargs):
+        """Override to include treatment plan warning in response."""
+        self._treatment_plan_warning = False
+        response = super().create(request, *args, **kwargs)
+        if self._treatment_plan_warning:
+            response.data['warning'] = (
+                'This client has no active treatment plan. '
+                'Consider creating one before ongoing sessions.'
+            )
+        return response
+
     def perform_create(self, serializer):
         """
         FIX CT-3: Validate that client_id and provider_id belong to the user's org
@@ -114,7 +125,36 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     'provider_id': 'This provider already has an appointment during this time slot.'
                 })
 
+        # HARDENING: Block scheduling if linked authorization is fully used
+        auth_id = validated.get('authorization')
+        if auth_id:
+            from apps.clients.models import Authorization
+            try:
+                auth = Authorization.objects.get(pk=auth_id)
+                if auth.units_remaining <= 0 and self.request.user.role != 'admin':
+                    from rest_framework.exceptions import ValidationError
+                    raise ValidationError({
+                        'authorization': (
+                            f'Authorization #{auth.authorization_number} is fully used '
+                            f'({auth.units_used}/{auth.units_approved} units). '
+                            f'Only admins can override this.'
+                        )
+                    })
+            except Authorization.DoesNotExist:
+                pass
+
         appointment = serializer.save(organization=org)
+
+        # HARDENING: Warn if client has no active treatment plan
+        client_id = validated.get('client')
+        if client_id:
+            from apps.clinical.models import TreatmentPlan
+            has_plan = TreatmentPlan.objects.filter(
+                client_id=client_id,
+                is_active=True,
+            ).exists()
+            if not has_plan:
+                self._treatment_plan_warning = True
 
         # Generate recurring instances if pattern provided
         if appointment.is_recurring and appointment.recurrence_pattern:
@@ -167,6 +207,16 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 ).update(
                     units_used=F('units_approved')
                 )
+
+                # Auto-generate notification if utilization hit threshold
+                try:
+                    from apps.notifications.services import notify_authorization_utilization
+                    auth = Authorization.objects.select_related(
+                        'client', 'client__organization',
+                    ).get(pk=appointment.authorization_id)
+                    notify_authorization_utilization(auth)
+                except Exception:
+                    pass  # Never break the main flow for notifications
 
         appointment.refresh_from_db()
         return Response(AppointmentSerializer(appointment).data)

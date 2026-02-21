@@ -168,21 +168,59 @@ class DocumentViewSet(viewsets.ModelViewSet):
     Document upload/download/delete.
 
     Supports multipart file uploads via POST.
+
+    FIX FU-1: Validates file extension, MIME type, and size before accepting.
+    HIPAA requirement: only safe document types, max 10MB.
     """
     permission_classes = [IsAuthenticated]
     serializer_class = DocumentSerializer
     parser_classes = [MultiPartParser, FormParser]
     filterset_fields = ['client', 'document_type']
 
+    # FIX FU-1: File upload security constants
+    ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.docx', '.doc'}
+    ALLOWED_MIME_TYPES = {
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword',
+    }
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+
     def get_queryset(self):
         return Document.objects.filter(
             client__organization=self.request.organization
         ).select_related('client', 'uploaded_by')
 
+    def _validate_file(self, file):
+        """Validate file extension, MIME type, and size."""
+        import os
+        from rest_framework.exceptions import ValidationError
+
+        ext = os.path.splitext(file.name)[1].lower()
+        if ext not in self.ALLOWED_EXTENSIONS:
+            raise ValidationError({
+                'file': f'File type "{ext}" is not allowed. '
+                        f'Accepted: {", ".join(sorted(self.ALLOWED_EXTENSIONS))}'
+            })
+
+        mime = (file.content_type or '').lower()
+        if mime and mime not in self.ALLOWED_MIME_TYPES:
+            raise ValidationError({
+                'file': f'MIME type "{mime}" is not allowed.'
+            })
+
+        if file.size > self.MAX_FILE_SIZE:
+            size_mb = round(file.size / (1024 * 1024), 1)
+            raise ValidationError({
+                'file': f'File size {size_mb}MB exceeds the 10MB limit.'
+            })
+
     def perform_create(self, serializer):
-        # Handle file upload (store path — Cloudinary integration TBD)
         file = self.request.FILES.get('file')
         if file:
+            self._validate_file(file)
             serializer.save(
                 uploaded_by=self.request.user,
                 file_name=file.name,

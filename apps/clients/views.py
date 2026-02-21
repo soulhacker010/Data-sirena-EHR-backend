@@ -13,6 +13,7 @@ Endpoints coordinated with frontend api/clients.ts:
 """
 import csv
 import io
+from django.db import transaction
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -127,8 +128,10 @@ class ClientViewSet(viewsets.ModelViewSet):
             })
 
         except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f'CSV import failed: {e}', exc_info=True)
             return Response(
-                {'error': True, 'message': str(e)},
+                {'error': True, 'message': 'Failed to import CSV. Please check the file format.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -200,9 +203,22 @@ class ClientDocumentViewSet(viewsets.ModelViewSet):
 
     POST   /api/v1/clients/{client_id}/documents/                → Upload
     DELETE /api/v1/clients/{client_id}/documents/{doc_id}/       → Delete
+
+    FIX FU-1: Validates file extension, MIME type, and size before accepting.
     """
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
+
+    # FIX FU-1: File upload security constants
+    ALLOWED_EXTENSIONS = {'.pdf', '.jpg', '.jpeg', '.png', '.docx', '.doc'}
+    ALLOWED_MIME_TYPES = {
+        'application/pdf',
+        'image/jpeg',
+        'image/png',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword',
+    }
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
     def get_queryset(self):
         from apps.clinical.models import Document
@@ -215,9 +231,34 @@ class ClientDocumentViewSet(viewsets.ModelViewSet):
         from apps.clinical.serializers import DocumentSerializer
         return DocumentSerializer
 
+    def _validate_file(self, file):
+        """Validate file extension, MIME type, and size."""
+        import os
+        from rest_framework.exceptions import ValidationError
+
+        ext = os.path.splitext(file.name)[1].lower()
+        if ext not in self.ALLOWED_EXTENSIONS:
+            raise ValidationError({
+                'file': f'File type "{ext}" is not allowed. '
+                        f'Accepted: {", ".join(sorted(self.ALLOWED_EXTENSIONS))}'
+            })
+
+        mime = (file.content_type or '').lower()
+        if mime and mime not in self.ALLOWED_MIME_TYPES:
+            raise ValidationError({
+                'file': f'MIME type "{mime}" is not allowed.'
+            })
+
+        if file.size > self.MAX_FILE_SIZE:
+            size_mb = round(file.size / (1024 * 1024), 1)
+            raise ValidationError({
+                'file': f'File size {size_mb}MB exceeds the 10MB limit.'
+            })
+
     def perform_create(self, serializer):
         file = self.request.FILES.get('file')
         if file:
+            self._validate_file(file)
             serializer.save(
                 client_id=self.kwargs['client_pk'],
                 uploaded_by=self.request.user,

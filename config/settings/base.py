@@ -138,6 +138,16 @@ REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
     ],
+    # FIX RL-1: Global rate limiting — prevents brute force and API abuse
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.UserRateThrottle',
+        'rest_framework.throttling.AnonRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'user': '100/min',     # Authenticated users: 100 requests/min
+        'anon': '20/min',      # Anonymous (login, password reset): 20/min
+        'login': '5/min',      # Login-specific: 5 attempts/min per IP
+    },
 }
 
 # ─── SimpleJWT ──────────────────────────────────────────────────────────────────
@@ -162,6 +172,9 @@ REST_FRAMEWORK['DEFAULT_AUTHENTICATION_CLASSES'] = [
 
 # ─── CORS ───────────────────────────────────────────────────────────────────────
 
+# FIX CO-1: Explicitly deny CORS_ALLOW_ALL_ORIGINS to prevent accidental override
+CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOWED_ORIGINS = os.getenv(
     'CORS_ALLOWED_ORIGINS', 'http://localhost:5173'
 ).split(',')
@@ -172,6 +185,7 @@ CORS_ALLOW_CREDENTIALS = True
 
 STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
 STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
+STRIPE_FEE_PASSTHROUGH = os.getenv('STRIPE_FEE_PASSTHROUGH', 'false').lower() == 'true'
 
 # ─── Resend Email ───────────────────────────────────────────────────────────────
 

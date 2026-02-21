@@ -31,6 +31,7 @@ class DashboardStatsView(APIView):
         from apps.scheduling.models import Appointment
         from apps.clinical.models import SessionNote
         from apps.billing.models import Invoice, Claim, Payment
+        from apps.audit.models import AuditLog
 
         # Core stats
         total_clients = Client.objects.filter(organization=org, is_active=True).count()
@@ -90,13 +91,36 @@ class DashboardStatsView(APIView):
         ).aggregate(total=Sum('total_amount'))['total'] or 1  # avoid div/0
         collections_rate = round(float(revenue_mtd) / float(total_billed) * 100, 1)
 
+        # Recent activity feed from audit log
+        recent_logs = AuditLog.objects.filter(
+            organization=org,
+        ).select_related('user').order_by('-timestamp')[:10]
+
+        action_labels = {
+            'create': 'Created',
+            'update': 'Updated',
+            'partial_update': 'Updated',
+            'delete': 'Deleted',
+        }
+
+        recent_activity = [
+            {
+                'id': str(log.id),
+                'user_name': log.user.full_name if log.user else 'System',
+                'action': action_labels.get(log.action, log.action),
+                'target': log.table_name.replace('-', ' ').replace('_', ' ').title(),
+                'timestamp': log.timestamp.isoformat(),
+            }
+            for log in recent_logs
+        ]
+
         return Response({
             'total_clients': total_clients,
             'sessions_this_month': sessions_this_month,
             'pending_notes': pending_notes,
             'revenue_mtd': float(revenue_mtd),
             'upcoming_appointments': upcoming_data,
-            'recent_activity': [],  # TODO: pull from audit log
+            'recent_activity': recent_activity,
             'billing_overview': {
                 'invoices_pending': invoices_pending,
                 'claims_submitted': claims_submitted,

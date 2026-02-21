@@ -193,7 +193,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.error(f'Batch invoice generation failed: {e}', exc_info=True)
             return Response(
-                {'error': f'Batch generation failed: {str(e)}'},
+                {'error': 'Batch generation failed. Please try again or contact support.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -246,11 +246,33 @@ class InvoiceViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except Exception as e:
+            logger.error(f'Invoice email failed: {e}', exc_info=True)
             return Response(
-                {'error': f'Failed to send email: {str(e)}'},
+                {'error': 'Failed to send email. Please try again.'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+    @action(detail=True, methods=['get'], url_path='download-pdf',
+            throttle_classes=[EmailRateThrottle])  # Reuse 10/min limit
+    def download_pdf(self, request, pk=None):
+        """
+        GET /api/v1/invoices/{id}/download-pdf/
+
+        Generate and return a PDF for this invoice.
+        """
+        from django.http import HttpResponse
+        from .pdf import generate_invoice_pdf
+
+        invoice = self.get_object()
+        pdf_bytes = generate_invoice_pdf(
+            invoice,
+            organization=request.organization,
+        )
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = (
+            f'attachment; filename="invoice_{invoice.invoice_number}.pdf"'
+        )
+        return response
 
 class PaymentViewSet(viewsets.ModelViewSet):
     """
@@ -360,12 +382,24 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
+            base_amount = serializer.validated_data['amount']
+
+            # Stripe fee passthrough: charge client the processing fee
+            if getattr(settings, 'STRIPE_FEE_PASSTHROUGH', False):
+                # Standard Stripe fee: 2.9% + $0.30
+                fee = (base_amount * Decimal('0.029')) + Decimal('0.30')
+                total_amount = base_amount + fee
+            else:
+                total_amount = base_amount
+
             intent = stripe.PaymentIntent.create(
-                amount=int(serializer.validated_data['amount'] * 100),  # cents
+                amount=int(total_amount * 100),  # cents
                 currency='usd',
                 metadata={
                     'invoice_id': str(invoice.id),
                     'organization_id': str(request.organization.id),
+                    'base_amount': str(base_amount),
+                    'fee_included': str(getattr(settings, 'STRIPE_FEE_PASSTHROUGH', False)),
                 },
             )
 
@@ -377,9 +411,9 @@ class PaymentViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as e:
-            logger.error(f'Stripe payment intent failed: {e}', exc_info=True)
+            logger.warning(f'Stripe payment intent failed: {e}', exc_info=True)
             return Response(
-                {'error': True, 'message': str(e)},
+                {'error': True, 'message': 'Payment processing failed. Please try again.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -423,6 +457,20 @@ class ClaimViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return ClaimCreateSerializer
         return ClaimSerializer
+
+    def perform_update(self, serializer):
+        """Detect status changes and trigger notifications."""
+        claim = self.get_object()
+        old_status = claim.status
+        instance = serializer.save()
+
+        # Auto-notify on denial
+        if instance.status == 'denied' and old_status != 'denied':
+            try:
+                from apps.notifications.services import notify_claim_denied
+                notify_claim_denied(instance)
+            except Exception:
+                pass  # Never break main flow for notifications
 
     @action(detail=True, methods=['post'], url_path='submit')
     def submit(self, request, pk=None):

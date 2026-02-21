@@ -28,7 +28,7 @@ class Appointment(OrganizationModel):
 
     client = models.ForeignKey(
         'clients.Client',
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of scheduling records
         related_name='appointments',
     )
     provider = models.ForeignKey(

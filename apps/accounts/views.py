@@ -20,6 +20,7 @@ from django.utils import timezone
 from rest_framework import generics, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -35,6 +36,12 @@ from .serializers import (
 )
 
 
+# FIX RL-2: Brute-force prevention — 5 login attempts per minute per IP
+class LoginRateThrottle(AnonRateThrottle):
+    """Strict throttle for login endpoint to prevent credential brute-forcing."""
+    rate = '5/min'
+
+
 class LoginView(generics.GenericAPIView):
     """
     POST /api/v1/auth/login/
@@ -43,6 +50,7 @@ class LoginView(generics.GenericAPIView):
     Matches frontend LoginRequest/LoginResponse types.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
     serializer_class = LoginSerializer
 
     def post(self, request):
