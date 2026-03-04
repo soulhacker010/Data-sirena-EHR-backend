@@ -66,7 +66,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Invoice.objects.filter(
-            organization=self.request.organization
+            organization=self.request.user.organization
         ).select_related('client').prefetch_related('items', 'payments')
 
         # Frontend filters: status, client_id, start_date, end_date
@@ -285,7 +285,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Payment.objects.filter(
-            invoice__organization=self.request.organization
+            invoice__organization=self.request.user.organization
         ).select_related('invoice', 'client', 'claim')
 
         # Frontend filter: invoice_id
@@ -313,20 +313,25 @@ class PaymentViewSet(viewsets.ModelViewSet):
         FIX #4:  Blocks payments on cancelled/voided invoices
         FIX CT-4: Validates invoice belongs to user's organization
         """
-        invoice = serializer.validated_data.get('invoice')
+        from apps.billing.models import Invoice
+        from rest_framework.exceptions import ValidationError
+
+        invoice_id = serializer.validated_data.get('invoice_id')
+        try:
+            invoice = Invoice.objects.get(pk=invoice_id)
+        except Invoice.DoesNotExist:
+            raise ValidationError({'invoice_id': 'Invoice not found.'})
 
         # FIX CT-4: Cross-tenant isolation — verify invoice belongs to this org
-        if invoice.organization_id != self.request.organization.id:
-            from rest_framework.exceptions import ValidationError
+        if invoice.organization_id != self.request.user.organization.id:
             raise ValidationError(
-                {'invoice': 'Invoice does not belong to your organization.'}
+                {'invoice_id': 'Invoice does not belong to your organization.'}
             )
 
         # FIX #4: Block payment on cancelled/voided invoices
         if invoice.status in BLOCKED_STATUSES:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError(
-                {'invoice': f'Cannot record payment on a {invoice.status} invoice.'}
+                {'invoice_id': f'Cannot record payment on a {invoice.status} invoice.'}
             )
 
         # FIX #3: Overpayment guard — re-read balance from DB to avoid stale data
@@ -334,12 +339,11 @@ class PaymentViewSet(viewsets.ModelViewSet):
         payment_amount = serializer.validated_data.get('amount', Decimal('0'))
 
         if payment_amount > invoice.balance:
-            from rest_framework.exceptions import ValidationError
             raise ValidationError(
                 {'amount': f'Payment of ${payment_amount} exceeds invoice balance of ${invoice.balance}.'}
             )
 
-        payment = serializer.save()
+        payment = serializer.save(invoice=invoice, client=invoice.client)
         # Recalculate invoice balance after payment
         payment.invoice.recalculate_balance()
 
@@ -372,7 +376,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
             invoice = Invoice.objects.get(
                 pk=serializer.validated_data['invoice_id'],
-                organization=request.organization,
+                organization=request.user.organization,
             )
 
             # Block Stripe payments on cancelled invoices
@@ -392,15 +396,19 @@ class PaymentViewSet(viewsets.ModelViewSet):
             else:
                 total_amount = base_amount
 
+            # Idempotency key prevents duplicate charges if user double-clicks
+            idempotency_key = f'pi_{invoice.id}_{int(total_amount * 100)}'
+
             intent = stripe.PaymentIntent.create(
                 amount=int(total_amount * 100),  # cents
                 currency='usd',
                 metadata={
                     'invoice_id': str(invoice.id),
-                    'organization_id': str(request.organization.id),
+                    'organization_id': str(request.user.organization.id),
                     'base_amount': str(base_amount),
                     'fee_included': str(getattr(settings, 'STRIPE_FEE_PASSTHROUGH', False)),
                 },
+                idempotency_key=idempotency_key,
             )
 
             return Response({'client_secret': intent.client_secret})
@@ -433,7 +441,7 @@ class ClaimViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Claim.objects.filter(
-            invoice__organization=self.request.organization
+            invoice__organization=self.request.user.organization
         ).select_related('invoice', 'client')
 
         # Frontend filters: status, payer_name, start_date, end_date
@@ -618,5 +626,5 @@ class ClientClaimsView(generics.ListAPIView):
     def get_queryset(self):
         return Claim.objects.filter(
             client_id=self.kwargs['client_id'],
-            client__organization=self.request.organization,
+            client__organization=self.request.user.organization,
         ).select_related('invoice')

@@ -16,8 +16,8 @@ from django.db import transaction
 from django.db.models import F
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_POST
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import AllowAny
 
 from .models import Invoice, Payment
 
@@ -25,7 +25,9 @@ logger = logging.getLogger(__name__)
 
 
 @csrf_exempt
-@require_POST
+@api_view(['POST'])
+@authentication_classes([])   # FIX WH-1: Bypass DRF JWT auth — security comes from Stripe signature
+@permission_classes([AllowAny])  # Stripe cannot send auth headers
 def stripe_webhook(request):
     """
     POST /api/v1/payments/webhook/
@@ -106,6 +108,7 @@ def _handle_payment_succeeded(payment_intent):
             # Create payment record
             Payment.objects.create(
                 invoice=invoice,
+                client=invoice.client,
                 amount=amount,
                 payment_type='payment',
                 payment_method='stripe',
@@ -183,6 +186,7 @@ def _handle_refund(charge):
             # Create refund record
             Payment.objects.create(
                 invoice=original_payment.invoice,
+                client=original_payment.invoice.client,
                 amount=refund_amount,
                 payment_type='refund',
                 payment_method='stripe',

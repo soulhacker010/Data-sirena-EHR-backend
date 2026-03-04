@@ -39,7 +39,7 @@ class NoteTemplateViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return NoteTemplate.objects.filter(
-            organization=self.request.organization
+            organization=self.request.user.organization
         )
 
     def perform_create(self, serializer):
@@ -77,11 +77,11 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
         if user.role == 'clinician':
             return qs.filter(
                 provider=user,
-                client__organization=self.request.organization,
+                client__organization=self.request.user.organization,
             )
 
         return qs.filter(
-            client__organization=self.request.organization
+            client__organization=self.request.user.organization
         )
 
     def get_serializer_class(self):
@@ -92,13 +92,23 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
         return SessionNoteSerializer
 
     def perform_create(self, serializer):
+        # Security: Validate client belongs to user's organization
+        from apps.clients.models import Client
+        client_id = serializer.validated_data.get('client_id')
+        if client_id:
+            org = self.request.user.organization
+            if not Client.objects.filter(id=client_id, organization=org).exists():
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    'client_id': 'Client does not belong to your organization.'
+                })
         serializer.save(provider=self.request.user)
 
     def perform_update(self, serializer):
         note = self.get_object()
-        if note.is_locked:
+        if note.is_locked or note.status in ('signed', 'co_signed'):
             from rest_framework.exceptions import PermissionDenied
-            raise PermissionDenied('Locked notes cannot be edited')
+            raise PermissionDenied('Signed or locked notes cannot be edited')
         serializer.save()
 
     def perform_destroy(self, instance):
@@ -156,7 +166,7 @@ class TreatmentPlanViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return TreatmentPlan.objects.filter(
-            client__organization=self.request.organization
+            client__organization=self.request.user.organization
         ).select_related('client', 'provider')
 
     def perform_create(self, serializer):
@@ -190,7 +200,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Document.objects.filter(
-            client__organization=self.request.organization
+            client__organization=self.request.user.organization
         ).select_related('client', 'uploaded_by')
 
     def _validate_file(self, file):

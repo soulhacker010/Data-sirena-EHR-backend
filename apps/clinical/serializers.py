@@ -82,14 +82,14 @@ class SessionNoteSerializer(serializers.ModelSerializer):
 
 class SessionNoteCreateSerializer(serializers.ModelSerializer):
     """For creating notes — accepts _id fields as frontend sends them."""
-    appointment_id = serializers.UUIDField(source='appointment', required=False, allow_null=True)
-    client_id = serializers.UUIDField(source='client')
-    template_id = serializers.UUIDField(source='template', required=False, allow_null=True)
+    appointment_id = serializers.UUIDField(required=False, allow_null=True)
+    client_id = serializers.UUIDField()
+    template_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = SessionNote
-        fields = ['appointment_id', 'client_id', 'template_id', 'note_data', 'service_code']
-        # note_data is a JSONField, service_code will fallback from the model
+        fields = ['id', 'appointment_id', 'client_id', 'template_id', 'note_data']
+        read_only_fields = ['id']
 
 
 class SessionNoteListSerializer(serializers.ModelSerializer):
@@ -139,7 +139,17 @@ class TreatmentPlanSerializer(serializers.ModelSerializer):
 
 
 class DocumentSerializer(serializers.ModelSerializer):
-    """Matches frontend ClientDocument type."""
+    """Matches frontend ClientDocument type.
+
+    Fields set by the view's perform_create (client, file_name, file_type,
+    file_size, file_path, uploaded_by) are read_only so serializer validation
+    does not reject the upload request for missing values.
+    The only user-supplied writable field is document_type.
+
+    FIX FU-2: Previously these server-set fields were writable, causing a 400
+    error on every document upload because serializer validation ran before
+    perform_create could supply the values.
+    """
     uploaded_by_name = serializers.SerializerMethodField()
 
     class Meta:
@@ -149,7 +159,11 @@ class DocumentSerializer(serializers.ModelSerializer):
             'file_name', 'file_type', 'file_size', 'file_path',
             'document_type', 'is_signed', 'signed_at', 'created_at',
         ]
-        read_only_fields = ['id', 'uploaded_by', 'created_at']
+        read_only_fields = [
+            'id', 'client', 'uploaded_by', 'uploaded_by_name',
+            'file_name', 'file_type', 'file_size', 'file_path',
+            'is_signed', 'signed_at', 'created_at',
+        ]
 
     def get_uploaded_by_name(self, obj):
         return obj.uploaded_by.full_name if obj.uploaded_by else None

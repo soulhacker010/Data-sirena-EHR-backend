@@ -49,7 +49,7 @@ class ClientViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Client.objects.filter(
-            organization=self.request.organization
+            organization=self.request.user.organization
         ).prefetch_related('authorizations')
 
     def get_serializer_class(self):
@@ -149,7 +149,7 @@ class AuthorizationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return Authorization.objects.filter(
             client_id=self.kwargs['client_pk'],
-            client__organization=self.request.organization,
+            client__organization=self.request.user.organization,
         )
 
     def perform_create(self, serializer):
@@ -175,7 +175,7 @@ class TopLevelAuthorizationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         return Authorization.objects.filter(
-            client__organization=self.request.organization,
+            client__organization=self.request.user.organization,
         )
 
     def perform_create(self, serializer):
@@ -188,7 +188,7 @@ class TopLevelAuthorizationViewSet(viewsets.ModelViewSet):
         if client_id:
             if not Client.objects.filter(
                 id=client_id,
-                organization=self.request.organization,
+                organization=self.request.user.organization,
             ).exists():
                 from rest_framework.exceptions import ValidationError
                 raise ValidationError(
@@ -222,9 +222,22 @@ class ClientDocumentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         from apps.clinical.models import Document
+        from apps.clients.models import Client
+        from rest_framework.exceptions import NotFound
+
+        # FIX FU-4: Verify the client exists in this org before returning documents.
+        # Without this check, a request with a nonexistent client_pk UUID would
+        # return an empty queryset and allow create to proceed (returning 201).
+        client_pk = self.kwargs['client_pk']
+        if not Client.objects.filter(
+            id=client_pk,
+            organization=self.request.user.organization,
+        ).exists():
+            raise NotFound('Client not found.')
+
         return Document.objects.filter(
-            client_id=self.kwargs['client_pk'],
-            client__organization=self.request.organization,
+            client_id=client_pk,
+            client__organization=self.request.user.organization,
         )
 
     def get_serializer_class(self):
@@ -256,19 +269,33 @@ class ClientDocumentViewSet(viewsets.ModelViewSet):
             })
 
     def perform_create(self, serializer):
+        from apps.clients.models import Client
+        from rest_framework.exceptions import NotFound, ValidationError
+
+        # FIX FU-4: Verify client exists in this org.
+        # DRF does NOT call get_queryset() on POST, so this check must live here.
+        # Without it, a fake client UUID would silently create a document and
+        # then fail at teardown with a FK violation.
+        client_pk = self.kwargs['client_pk']
+        if not Client.objects.filter(
+            id=client_pk,
+            organization=self.request.user.organization,
+        ).exists():
+            raise NotFound('Client not found.')
+
         file = self.request.FILES.get('file')
-        if file:
-            self._validate_file(file)
-            serializer.save(
-                client_id=self.kwargs['client_pk'],
-                uploaded_by=self.request.user,
-                file_name=file.name,
-                file_type=file.content_type or '',
-                file_size=file.size,
-                file_path=f"documents/{file.name}",
-            )
-        else:
-            serializer.save(
-                client_id=self.kwargs['client_pk'],
-                uploaded_by=self.request.user,
-            )
+
+        # FIX FU-3: Require a file — without this guard, the DB would crash
+        # with a NOT NULL violation on file_size (500 instead of 400).
+        if not file:
+            raise ValidationError({'file': 'A file is required for upload.'})
+
+        self._validate_file(file)
+        serializer.save(
+            client_id=client_pk,
+            uploaded_by=self.request.user,
+            file_name=file.name,
+            file_type=file.content_type or '',
+            file_size=file.size,
+            file_path=f"documents/{file.name}",
+        )

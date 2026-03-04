@@ -43,7 +43,7 @@ class InvoiceItemSerializer(serializers.ModelSerializer):
 
 class InvoiceItemCreateSerializer(serializers.ModelSerializer):
     """For creating invoice items — accepts flat fields."""
-    appointment_id = serializers.UUIDField(source='appointment', required=False, allow_null=True)
+    appointment_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = InvoiceItem
@@ -75,8 +75,8 @@ class PaymentCreateSerializer(serializers.ModelSerializer):
 
     FIX #10: Validates amount >= 0.01 to block zero/negative payments.
     """
-    invoice_id = serializers.UUIDField(source='invoice')
-    claim_id = serializers.UUIDField(source='claim', required=False, allow_null=True)
+    invoice_id = serializers.UUIDField()
+    claim_id = serializers.UUIDField(required=False, allow_null=True)
     amount = serializers.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -119,7 +119,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
     """For creating invoices — accepts client_id and nested items."""
-    client_id = serializers.UUIDField(source='client')
+    client_id = serializers.UUIDField()
     items = InvoiceItemCreateSerializer(many=True)
 
     class Meta:
@@ -210,14 +210,15 @@ class ClaimSerializer(serializers.ModelSerializer):
 
 class ClaimCreateSerializer(serializers.ModelSerializer):
     """For submitting claims — matches SubmitClaimPayload."""
-    invoice_id = serializers.UUIDField(source='invoice')
+    invoice_id = serializers.UUIDField()
 
     class Meta:
         model = Claim
-        fields = ['invoice_id', 'payer_name', 'payer_id']
+        fields = ['id', 'invoice_id', 'payer_name', 'payer_id']
+        read_only_fields = ['id']
 
     def create(self, validated_data):
-        invoice = Invoice.objects.get(pk=validated_data['invoice'])
+        invoice = Invoice.objects.get(pk=validated_data['invoice_id'])
         validated_data['client'] = invoice.client
         validated_data['billed_amount'] = invoice.total_amount
         return super().create(validated_data)

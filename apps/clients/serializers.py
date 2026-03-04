@@ -160,10 +160,11 @@ class ClientCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
         fields = [
-            'first_name', 'last_name', 'date_of_birth', 'gender',
+            'id', 'first_name', 'last_name', 'date_of_birth', 'gender',
             'address', 'city', 'state', 'zip_code', 'phone', 'email',
             'emergency_contact_name', 'emergency_contact_phone',
             'insurance_primary_name', 'insurance_primary_id', 'insurance_primary_group',
             'insurance_secondary_name', 'insurance_secondary_id',
             'diagnosis_codes',
         ]
+        read_only_fields = ['id']

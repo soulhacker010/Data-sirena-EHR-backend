@@ -41,7 +41,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Appointment.objects.filter(
-            organization=self.request.organization
+            organization=self.request.user.organization
         ).select_related('client', 'provider', 'location', 'authorization')
 
         # Date range filtering for calendar views
@@ -97,13 +97,13 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         validated = serializer.validated_data
 
         # Validate client belongs to org
-        client_id = validated.get('client')
+        client_id = validated.get('client_id')
         if client_id and not Client.objects.filter(id=client_id, organization=org).exists():
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'client_id': 'Client does not belong to your organization.'})
 
         # Validate provider belongs to org
-        provider_id = validated.get('provider')
+        provider_id = validated.get('provider_id')
         if provider_id and not User.objects.filter(id=provider_id, organization=org).exists():
             from rest_framework.exceptions import ValidationError
             raise ValidationError({'provider_id': 'Provider does not belong to your organization.'})
@@ -126,7 +126,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                 })
 
         # HARDENING: Block scheduling if linked authorization is fully used
-        auth_id = validated.get('authorization')
+        auth_id = validated.get('authorization_id')
         if auth_id:
             from apps.clients.models import Authorization
             try:
@@ -146,7 +146,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         appointment = serializer.save(organization=org)
 
         # HARDENING: Warn if client has no active treatment plan
-        client_id = validated.get('client')
+        client_id = validated.get('client_id')
         if client_id:
             from apps.clinical.models import TreatmentPlan
             has_plan = TreatmentPlan.objects.filter(

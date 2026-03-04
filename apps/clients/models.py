@@ -48,6 +48,9 @@ class Client(OrganizationModel):
 
     is_active = models.BooleanField(default=True)
 
+    # Analytics — how the client found us
+    referral_source = models.CharField(max_length=255, blank=True, default='')
+
     class Meta(OrganizationModel.Meta):
         ordering = ['last_name', 'first_name']
         indexes = [

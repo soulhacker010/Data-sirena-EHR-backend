@@ -75,10 +75,10 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
     For creating appointments — accepts IDs as the frontend sends them:
       client_id, provider_id, location_id, authorization_id
     """
-    client_id = serializers.UUIDField(source='client', write_only=False)
-    provider_id = serializers.UUIDField(source='provider', write_only=False)
-    location_id = serializers.UUIDField(source='location', required=False, allow_null=True)
-    authorization_id = serializers.UUIDField(source='authorization', required=False, allow_null=True)
+    client_id = serializers.UUIDField(write_only=False)
+    provider_id = serializers.UUIDField(write_only=False)
+    location_id = serializers.UUIDField(required=False, allow_null=True)
+    authorization_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = Appointment

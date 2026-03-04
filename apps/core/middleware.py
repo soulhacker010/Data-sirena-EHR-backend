@@ -17,12 +17,20 @@ class OrganizationMiddleware(MiddlewareMixin):
     Injects `request.organization` from the authenticated user's organization.
     This enables all views to scope queries to the user's organization without
     manually looking it up each time.
+
+    Uses SimpleLazyObject so the lookup is deferred until the attribute is
+    actually accessed — by that time DRF's JWT authentication has already run.
     """
 
     def process_request(self, request):
-        request.organization = None
-        if hasattr(request, 'user') and request.user.is_authenticated:
-            request.organization = getattr(request.user, 'organization', None)
+        from django.utils.functional import SimpleLazyObject
+
+        def _get_organization():
+            if hasattr(request, 'user') and request.user.is_authenticated:
+                return getattr(request.user, 'organization', None)
+            return None
+
+        request.organization = SimpleLazyObject(_get_organization)
 
 
 class AuditMiddleware(MiddlewareMixin):

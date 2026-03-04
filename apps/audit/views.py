@@ -24,7 +24,7 @@ class AuditLogViewSet(
 
     def get_queryset(self):
         qs = AuditLog.objects.filter(
-            organization=self.request.organization
+            organization=self.request.user.organization
         ).select_related('user')
 
         # Date range — frontend sends start_date / end_date
