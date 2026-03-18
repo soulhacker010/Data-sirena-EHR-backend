@@ -9,8 +9,6 @@ Every error response follows this format:
 }
 """
 from rest_framework.views import exception_handler
-from rest_framework.response import Response
-from rest_framework import status
 
 
 def custom_exception_handler(exc, context):
@@ -39,6 +37,13 @@ def _get_error_message(response):
     if isinstance(response.data, dict):
         if 'detail' in response.data:
             return str(response.data['detail'])
+        # Non-field errors (e.g. login validation) — return message without key prefix
+        if 'non_field_errors' in response.data:
+            nfe = response.data['non_field_errors']
+            if isinstance(nfe, list) and nfe:
+                return str(nfe[0])
+            if isinstance(nfe, str):
+                return nfe
         # Get first field error
         for field, errors in response.data.items():
             if isinstance(errors, list) and errors:

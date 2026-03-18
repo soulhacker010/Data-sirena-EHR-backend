@@ -147,7 +147,17 @@ def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Hea
     """
     safe_org = _esc(org_name)
     safe_header = _esc(header_text)
-    org_initials = _initials(org_name)
+    frontend_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/') or ''
+    logo_url = f'{frontend_url}/images/EHRlogo.png' if frontend_url else ''
+
+    # Logo image tag for the header (falls back to text initials if no URL)
+    if logo_url:
+        logo_cell = f'<td style="width:52px;height:52px;text-align:center;vertical-align:middle"><img src="{logo_url}" alt="{safe_org}" width="52" height="52" style="display:block;width:52px;height:52px;object-fit:contain;border:0" /></td>'
+        top_badge = f'<img src="{logo_url}" alt="Sirena Health EHR" width="160" height="40" style="display:inline-block;width:160px;height:40px;object-fit:contain;border:0" />'
+    else:
+        org_initials = _initials(org_name)
+        logo_cell = f'<td style="width:52px;height:52px;border-radius:16px;background:{SURFACE_TINT};border:1px solid rgba(13,148,136,0.18);text-align:center;color:{PRIMARY_DARK};font-size:20px;font-weight:700">{org_initials}</td>'
+        top_badge = f'<span style="display:inline-block;padding:7px 12px;border-radius:999px;background:{CARD};border:1px solid rgba(13,148,136,0.12);color:{PRIMARY_DARK};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Sirena Health EHR</span>'
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -163,7 +173,7 @@ def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Hea
                 <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%">
                     <tr>
                         <td style="padding:0 0 20px;text-align:center">
-                            <span style="display:inline-block;padding:7px 12px;border-radius:999px;background:{CARD};border:1px solid rgba(13,148,136,0.12);color:{PRIMARY_DARK};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Sirena Health EHR</span>
+                            {top_badge}
                         </td>
                     </tr>
                     <tr>
@@ -173,7 +183,7 @@ def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Hea
                                     <td style="vertical-align:top">
                                         <table role="presentation" cellpadding="0" cellspacing="0">
                                             <tr>
-                                                <td style="width:52px;height:52px;border-radius:16px;background:{SURFACE_TINT};border:1px solid rgba(13,148,136,0.18);text-align:center;color:{PRIMARY_DARK};font-size:20px;font-weight:700">{org_initials}</td>
+                                                {logo_cell}
                                                 <td style="width:16px"></td>
                                                 <td>
                                                     <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase">Care coordination</p>
