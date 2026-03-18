@@ -561,7 +561,7 @@ class TestWebhookSecurity:
     fail until @authentication_classes([]) is added to the view or the URL is
     mounted outside the DRF route. Documenting as known issue.
     """
-    url = '/api/v1/payments/webhook/'
+    url = '/api/v1/webhooks/stripe/'
 
     def test_webhook_rejects_get(self):
         """Webhook only accepts POST."""

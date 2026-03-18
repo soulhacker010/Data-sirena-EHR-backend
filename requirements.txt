@@ -33,6 +33,9 @@ celery==5.3.6
 redis==5.0.1
 django-celery-beat==2.6.0
 
+# Production
+whitenoise==6.6.0
+
 # Utilities
 Pillow==10.2.0
 openpyxl==3.1.2

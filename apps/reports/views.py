@@ -185,6 +185,104 @@ class BillingSummaryView(APIView):
         })
 
 
+class PaymentsReportView(APIView):
+    permission_classes = [IsAuthenticated, IsSupervisorOrAbove]
+
+    def _normalize_payment_method(self, value):
+        if value in ('stripe', 'credit_card'):
+            return 'credit_card'
+        if value in ('eft', 'ach'):
+            return 'eft'
+        if value in ('check', 'cash', 'other'):
+            return value
+        return 'other'
+
+    def _get_payment_queryset(self, org, start_date, end_date, Payment):
+        payment_qs = Payment.objects.filter(
+            invoice__organization=org,
+        ).select_related('invoice', 'client')
+
+        if start_date:
+            payment_qs = payment_qs.filter(payment_date__date__gte=start_date)
+        if end_date:
+            payment_qs = payment_qs.filter(payment_date__date__lte=end_date)
+
+        return payment_qs
+
+    def _get_totals(self, payment_qs):
+        collected_total = payment_qs.filter(payment_type='payment').aggregate(
+            total=Sum('amount'),
+        )['total'] or 0
+        refunded_total = payment_qs.filter(payment_type='refund').aggregate(
+            total=Sum('amount'),
+        )['total'] or 0
+        return collected_total, refunded_total
+
+    def _build_method_breakdown(self, payment_qs):
+        method_rows = payment_qs.filter(payment_type='payment').values(
+            'payment_method',
+        ).annotate(
+            total=Sum('amount'),
+            transactions=Count('id'),
+        ).order_by('-total')
+
+        method_map = {}
+        for row in method_rows:
+            method_key = self._normalize_payment_method(row['payment_method'])
+            if method_key in method_map:
+                method_map[method_key]['total'] += float(row['total'] or 0)
+                method_map[method_key]['transactions'] += row['transactions']
+            else:
+                method_map[method_key] = {
+                    'payment_method': method_key,
+                    'total': float(row['total'] or 0),
+                    'transactions': row['transactions'],
+                }
+
+        return sorted(
+            method_map.values(),
+            key=lambda item: item['total'],
+            reverse=True,
+        )
+
+    def _serialize_transactions(self, payment_qs):
+        return [
+            {
+                'id': str(payment.id),
+                'invoice_id': str(payment.invoice_id),
+                'invoice_number': payment.invoice.invoice_number,
+                'client_name': payment.client.full_name,
+                'amount': float(payment.amount),
+                'payment_type': payment.payment_type,
+                'payment_method': self._normalize_payment_method(payment.payment_method),
+                'payment_date': payment.payment_date.isoformat(),
+                'reference_number': payment.reference_number,
+            }
+            for payment in payment_qs.order_by('-payment_date')[:100]
+        ]
+
+    def get(self, request):
+        from apps.billing.models import Payment
+
+        org = request.organization
+        start_date = request.query_params.get('start_date')
+        end_date = request.query_params.get('end_date')
+
+        payment_qs = self._get_payment_queryset(org, start_date, end_date, Payment)
+        collected_total, refunded_total = self._get_totals(payment_qs)
+        method_breakdown = self._build_method_breakdown(payment_qs)
+        transactions = self._serialize_transactions(payment_qs)
+
+        return Response({
+            'total_transactions': payment_qs.count(),
+            'total_collected': float(collected_total),
+            'total_refunded': float(refunded_total),
+            'net_collected': float(collected_total - refunded_total),
+            'method_breakdown': method_breakdown,
+            'transactions': transactions,
+        })
+
+
 class AuthorizationReportView(APIView):
     """
     GET /api/v1/reports/authorizations/

@@ -100,7 +100,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
-            'licenses', 'credentials', 'password', 'organization_id',
+            'phone', 'licenses', 'credentials', 'password', 'organization_id',
         ]
         read_only_fields = ['id']
 
@@ -112,6 +112,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         user.set_password(password)
         user.save()
         return user
+
+    def to_representation(self, instance):
+        return UserSerializer(instance, context=self.context).data
 
 
 class UserUpdateSerializer(serializers.ModelSerializer):

@@ -14,6 +14,7 @@ class Notification(models.Model):
         ('missing_note', 'Missing Note'),
         ('appointment_reminder', 'Appointment Reminder'),
         ('claim_denied', 'Claim Denied'),
+        ('payment_received', 'Payment Received'),
         ('general', 'General'),
     ]
 

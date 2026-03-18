@@ -151,6 +151,7 @@ class Document(BaseModel):
     file_type = models.CharField(max_length=50)
     file_size = models.IntegerField()
     file_path = models.TextField()  # Cloudinary URL
+    cloudinary_public_id = models.CharField(max_length=255, blank=True, default='')
     document_type = models.CharField(max_length=100, blank=True, default='')
     is_signed = models.BooleanField(default=False)
     signature_data = models.TextField(blank=True, default='')

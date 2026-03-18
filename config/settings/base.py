@@ -16,6 +16,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
 # Security
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'django-insecure-change-me')
+DEBUG = os.getenv('DEBUG', 'true').lower() in ('true', '1', 'yes')
 
 # Application definition
 INSTALLED_APPS = [
@@ -49,6 +50,7 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -87,6 +89,7 @@ DATABASES = {
     'default': dj_database_url.config(
         default=os.getenv('DATABASE_URL', 'postgres://postgres@localhost:5432/sirena_ehr'),
         conn_max_age=600,
+        ssl_require=os.getenv('DATABASE_SSL_REQUIRE', 'false').lower() in ('true', '1', 'yes'),
     )
 }
 
@@ -144,9 +147,10 @@ REST_FRAMEWORK = {
         'rest_framework.throttling.AnonRateThrottle',
     ],
     'DEFAULT_THROTTLE_RATES': {
-        'user': '100/min',     # Authenticated users: 100 requests/min
-        'anon': '20/min',      # Anonymous (login, password reset): 20/min
-        'login': '5/min',      # Login-specific: 5 attempts/min per IP
+        'user': os.getenv('DRF_THROTTLE_USER', '100/min'),
+        'anon': os.getenv('DRF_THROTTLE_ANON', '20/min'),
+        'login': os.getenv('DRF_THROTTLE_LOGIN', '5/min'),
+        'email': os.getenv('DRF_THROTTLE_EMAIL', '10/min'),
     },
 }
 
@@ -191,6 +195,7 @@ STRIPE_FEE_PASSTHROUGH = os.getenv('STRIPE_FEE_PASSTHROUGH', 'false').lower() ==
 
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'no-reply@sirenahealthehr.com')
+RESEND_REPLY_TO = os.getenv('RESEND_REPLY_TO', '')
 
 # ─── Cloudinary ─────────────────────────────────────────────────────────────────
 
@@ -208,3 +213,8 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# ─── Application ───────────────────────────────────────────────────────────────
+
+FRONTEND_BASE_URL = os.getenv('FRONTEND_BASE_URL', 'http://localhost:5173')
+DJANGO_ADMIN_URL = os.getenv('DJANGO_ADMIN_URL', 'admin')

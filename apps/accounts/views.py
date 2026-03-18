@@ -39,7 +39,7 @@ from .serializers import (
 # FIX RL-2: Brute-force prevention — 5 login attempts per minute per IP
 class LoginRateThrottle(AnonRateThrottle):
     """Strict throttle for login endpoint to prevent credential brute-forcing."""
-    rate = '5/min'
+    scope = 'login'
 
 
 class LoginView(generics.GenericAPIView):
@@ -179,6 +179,14 @@ class UserViewSet(viewsets.ModelViewSet):
         """Create user and send welcome email."""
         import logging
         logger = logging.getLogger(__name__)
+
+        request_org = self.request.user.organization_id
+        payload_org = serializer.validated_data.get('organization_id')
+        if payload_org != request_org:
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                'organization_id': 'You can only create users in your own organization.'
+            })
 
         user = serializer.save()
 

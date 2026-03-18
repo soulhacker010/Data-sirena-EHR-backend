@@ -4,7 +4,7 @@ Dashboard stats view — coordinated with frontend api/billing.ts → dashboardA
 GET /api/v1/dashboard/stats/ → DashboardPage loads
 """
 from datetime import timedelta
-from django.db.models import Sum, Count, Q
+from django.db.models import Sum, Q, F, DecimalField, ExpressionWrapper
 from django.utils import timezone
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -40,10 +40,20 @@ class DashboardStatsView(APIView):
             start_time__gte=month_start,
             status='attended',
         ).count()
-        pending_notes = SessionNote.objects.filter(
-            client__organization=org,
-            status__in=['draft', 'completed'],
-        ).count()
+        if request.user.role == 'clinician':
+            pending_notes = SessionNote.objects.filter(
+                client__organization=org,
+            ).filter(
+                Q(provider=request.user, status__in=['draft', 'completed'])
+                | Q(status='signed', note_data__co_sign_request__recipient_id=str(request.user.id))
+            ).count()
+        else:
+            pending_notes = SessionNote.objects.filter(
+                client__organization=org,
+            ).filter(
+                Q(status__in=['draft', 'completed'])
+                | Q(status='signed', note_data__co_sign_request__recipient_id=str(request.user.id))
+            ).count()
 
         # Revenue MTD
         revenue_mtd = Payment.objects.filter(
@@ -74,11 +84,24 @@ class DashboardStatsView(APIView):
         ]
 
         # Billing overview
-        invoices_pending = Invoice.objects.filter(
-            organization=org, status='pending'
-        ).count()
+        outstanding_balance_expression = ExpressionWrapper(
+            F('total_amount') - F('paid_amount'),
+            output_field=DecimalField(max_digits=10, decimal_places=2),
+        )
+        outstanding_invoices = Invoice.objects.filter(
+            organization=org,
+        ).exclude(status='cancelled').annotate(
+            computed_balance=outstanding_balance_expression,
+        ).filter(
+            computed_balance__gt=0,
+        )
+        invoices_pending = outstanding_invoices.count()
+        outstanding_balance = outstanding_invoices.aggregate(
+            total=Sum('computed_balance')
+        )['total'] or 0
         claims_submitted = Claim.objects.filter(
-            invoice__organization=org, status='submitted'
+            invoice__organization=org,
+            status__in=['submitted', 'resubmitted', 'accepted', 'paid'],
         ).count()
         claims_denied = Claim.objects.filter(
             invoice__organization=org, status='denied'
@@ -123,6 +146,7 @@ class DashboardStatsView(APIView):
             'recent_activity': recent_activity,
             'billing_overview': {
                 'invoices_pending': invoices_pending,
+                'outstanding_balance': float(outstanding_balance),
                 'claims_submitted': claims_submitted,
                 'claims_denied': claims_denied,
                 'collections_rate': collections_rate,

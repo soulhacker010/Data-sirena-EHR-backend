@@ -11,5 +11,5 @@ router.register(r'claims', ClaimViewSet, basename='claim')
 urlpatterns = [
     path('', include(router.urls)),
     path('clients/<uuid:client_id>/claims/', ClientClaimsView.as_view(), name='client-claims'),
-    path('payments/webhook/', stripe_webhook, name='stripe-webhook'),
+    path('webhooks/stripe/', stripe_webhook, name='stripe-webhook'),
 ]

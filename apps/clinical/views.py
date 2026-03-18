@@ -11,20 +11,21 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
+from django.db.models import Q
 
-from apps.core.permissions import IsClinicalStaff, IsSupervisorOrAbove, IsOwnerOrAdmin
+from apps.core.permissions import IsClinicalStaff
 from .models import NoteTemplate, SessionNote, TreatmentPlan, Document
 from .serializers import (
     NoteTemplateSerializer,
     SessionNoteSerializer,
-    SessionNoteCreateSerializer,
+    SessionNoteWriteSerializer,
     SessionNoteListSerializer,
     SignNoteSerializer,
     CoSignNoteSerializer,
     TreatmentPlanSerializer,
     DocumentSerializer,
 )
-from .services import NoteSigningService
+from .services import NoteSigningService, DocumentStorageService
 
 
 class NoteTemplateViewSet(viewsets.ModelViewSet):
@@ -76,8 +77,11 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if user.role == 'clinician':
             return qs.filter(
-                provider=user,
                 client__organization=self.request.user.organization,
+            ).filter(
+                Q(provider=user)
+                | Q(co_signed_by=user)
+                | Q(note_data__co_sign_request__recipient_id=str(user.id))
             )
 
         return qs.filter(
@@ -87,8 +91,8 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
     def get_serializer_class(self):
         if self.action == 'list':
             return SessionNoteListSerializer
-        if self.action == 'create':
-            return SessionNoteCreateSerializer
+        if self.action in ('create', 'update', 'partial_update'):
+            return SessionNoteWriteSerializer
         return SessionNoteSerializer
 
     def perform_create(self, serializer):
@@ -139,17 +143,37 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='cosign')
     def co_sign(self, request, pk=None):
-        """POST /api/v1/notes/{id}/cosign/ — supervisor co-signs."""
+        """POST /api/v1/notes/{id}/cosign/ — request or complete co-sign."""
         note = self.get_object()
         serializer = CoSignNoteSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
         try:
-            note = NoteSigningService.co_sign_note(
-                note,
-                serializer.validated_data['supervisor_signature'],
-                request.user,
-            )
+            if serializer.validated_data.get('supervisor_id'):
+                from apps.accounts.models import User
+                recipient = User.objects.filter(
+                    id=serializer.validated_data['supervisor_id'],
+                    organization=request.user.organization,
+                    is_active=True,
+                ).first()
+                if not recipient:
+                    return Response(
+                        {'error': True, 'message': 'Selected co-signer was not found in your organization.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                note = NoteSigningService.request_co_sign_note(
+                    note,
+                    recipient,
+                    request.user,
+                    serializer.validated_data.get('message', ''),
+                )
+            else:
+                note = NoteSigningService.co_sign_note(
+                    note,
+                    serializer.validated_data['supervisor_signature'],
+                    request.user,
+                )
             return Response(SessionNoteSerializer(note).data)
         except ValueError as e:
             return Response(
@@ -231,12 +255,33 @@ class DocumentViewSet(viewsets.ModelViewSet):
         file = self.request.FILES.get('file')
         if file:
             self._validate_file(file)
+            client = serializer.validated_data['client']
+            upload_result = DocumentStorageService.upload_document(file, client)
             serializer.save(
                 uploaded_by=self.request.user,
                 file_name=file.name,
                 file_type=file.content_type or '',
                 file_size=file.size,
-                file_path=f"documents/{file.name}",  # Placeholder path
+                file_path=upload_result['file_path'],
+                cloudinary_public_id=upload_result['cloudinary_public_id'],
             )
         else:
             serializer.save(uploaded_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        DocumentStorageService.delete_document(
+            cloudinary_public_id=instance.cloudinary_public_id,
+            file_name=instance.file_name,
+            file_type=instance.file_type,
+        )
+        instance.delete()
+
+    @action(detail=True, methods=['get'], url_path='access')
+    def access(self, request, pk=None):
+        instance = self.get_object()
+        download = request.query_params.get('download', '').lower() in {'1', 'true', 'yes'}
+        access_url = DocumentStorageService.generate_access_url(
+            instance,
+            as_attachment=download,
+        )
+        return Response({'url': access_url})

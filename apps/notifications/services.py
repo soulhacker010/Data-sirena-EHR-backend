@@ -18,6 +18,15 @@ from .models import Notification
 logger = logging.getLogger(__name__)
 
 
+PAYMENT_METHOD_LABELS = {
+    'stripe': 'Stripe',
+    'credit_card': 'Credit Card',
+    'eft': 'EFT',
+    'check': 'Check',
+    'cash': 'Cash',
+}
+
+
 def notify_authorization_utilization(authorization):
     """
     Check authorization utilization and create alerts at thresholds.
@@ -167,6 +176,52 @@ def notify_claim_denied(claim):
         )
 
 
+def notify_payment_recorded(payment):
+    if not payment or payment.payment_type != 'payment' or not payment.invoice_id:
+        return
+
+    from apps.accounts.models import User
+
+    invoice = payment.invoice
+    org = invoice.organization
+    if not org:
+        return
+
+    method = (payment.payment_method or '').strip()
+    method_label = PAYMENT_METHOD_LABELS.get(method, 'Payment')
+
+    recipients = User.objects.filter(
+        organization=org,
+        role__in=['admin', 'supervisor', 'biller'],
+        is_active=True,
+    )
+
+    for user in recipients:
+        existing = Notification.objects.filter(
+            user=user,
+            organization=org,
+            notification_type='payment_received',
+            link='/billing?tab=payments',
+            created_at__gte=timezone.now() - timedelta(days=1),
+            message__contains=invoice.invoice_number,
+        ).exists()
+        if existing:
+            continue
+
+        Notification.objects.create(
+            user=user,
+            organization=org,
+            notification_type='payment_received',
+            title='Payment Received',
+            message=(
+                f'{method_label} payment of ${payment.amount} was recorded for '
+                f'invoice #{invoice.invoice_number} for {invoice.client.full_name}.'
+            ),
+            priority='medium',
+            link='/billing?tab=payments',
+        )
+
+
 def check_missing_notes_bulk(organization):
     """
     Bulk check for all attended appointments without signed notes.
@@ -175,7 +230,6 @@ def check_missing_notes_bulk(organization):
     Checks all attended appointments from the last 7 days.
     """
     from apps.scheduling.models import Appointment
-    from apps.clinical.models import SessionNote
 
     cutoff = timezone.now() - timedelta(days=7)
     threshold = timezone.now() - timedelta(hours=24)

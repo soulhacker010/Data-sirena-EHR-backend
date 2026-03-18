@@ -12,6 +12,7 @@ from decimal import Decimal
 from django.db import transaction
 from rest_framework import serializers
 from .models import Invoice, InvoiceItem, Payment, Claim
+from .service_catalog import get_service_description
 
 
 class InvoiceItemSerializer(serializers.ModelSerializer):
@@ -52,21 +53,48 @@ class InvoiceItemCreateSerializer(serializers.ModelSerializer):
             'units', 'rate', 'amount',
         ]
 
+    def validate_service_code(self, value):
+        service_code = (value or '').strip()
+        if not service_code:
+            raise serializers.ValidationError('Service code is required.')
+        return service_code
+
+    def validate_units(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Units must be greater than 0.')
+        return value
+
+    def validate_rate(self, value):
+        if value <= 0:
+            raise serializers.ValidationError('Rate must be greater than $0.00.')
+        return value
+
+    def validate(self, attrs):
+        attrs['description'] = (attrs.get('description') or '').strip() or get_service_description(attrs['service_code'])
+        attrs['amount'] = attrs['units'] * attrs['rate']
+        return attrs
+
 
 class PaymentSerializer(serializers.ModelSerializer):
     """Matches frontend Payment type."""
     invoice_id = serializers.UUIDField(source='invoice.id', read_only=True)
+    invoice_number = serializers.SerializerMethodField()
     claim_id = serializers.UUIDField(source='claim.id', read_only=True, allow_null=True)
     client_id = serializers.UUIDField(source='client.id', read_only=True)
 
     class Meta:
         model = Payment
         fields = [
-            'id', 'invoice_id', 'claim_id', 'client_id', 'amount',
+            'id', 'invoice_id', 'invoice_number', 'claim_id', 'client_id', 'amount',
             'payment_type', 'payer_type', 'payment_method',
             'stripe_payment_id', 'payment_date', 'reference_number', 'notes',
         ]
         read_only_fields = ['id', 'payment_date']
+
+    def get_invoice_number(self, obj):
+        if obj.invoice:
+            return obj.invoice.invoice_number or f"INV-{str(obj.invoice.id).split('-')[0].upper()}"
+        return None
 
 
 class PaymentCreateSerializer(serializers.ModelSerializer):
@@ -97,6 +125,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
     client_id = serializers.UUIDField(source='client.id', read_only=True)
     client_name = serializers.SerializerMethodField()
     client_email = serializers.SerializerMethodField()
+    invoice_number = serializers.SerializerMethodField()
     items = InvoiceItemSerializer(many=True, read_only=True)
     payments = PaymentSerializer(many=True, read_only=True)
 
@@ -116,6 +145,9 @@ class InvoiceSerializer(serializers.ModelSerializer):
     def get_client_email(self, obj):
         return obj.client.email if obj.client else None
 
+    def get_invoice_number(self, obj):
+        return obj.invoice_number or f"INV-{str(obj.id).split('-')[0].upper()}"
+
 
 class InvoiceCreateSerializer(serializers.ModelSerializer):
     """For creating invoices — accepts client_id and nested items."""
@@ -128,6 +160,11 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
             'client_id', 'invoice_date', 'due_date', 'items',
         ]
 
+    def validate_items(self, items):
+        if not items:
+            raise serializers.ValidationError('At least one invoice item is required.')
+        return items
+
     def create(self, validated_data):
         """
         Create invoice with nested items.
@@ -137,7 +174,7 @@ class InvoiceCreateSerializer(serializers.ModelSerializer):
         """
         items_data = validated_data.pop('items')
         # Auto-calculate total
-        total = sum(item.get('amount', 0) for item in items_data)
+        total = sum(item.get('amount', Decimal('0')) for item in items_data)
 
         with transaction.atomic():
             invoice = Invoice.objects.create(
@@ -156,6 +193,7 @@ class InvoiceListSerializer(serializers.ModelSerializer):
     organization_id = serializers.UUIDField(source='organization.id', read_only=True)
     client_id = serializers.UUIDField(source='client.id', read_only=True)
     client_name = serializers.SerializerMethodField()
+    invoice_number = serializers.SerializerMethodField()
 
     class Meta:
         model = Invoice
@@ -168,6 +206,9 @@ class InvoiceListSerializer(serializers.ModelSerializer):
 
     def get_client_name(self, obj):
         return obj.client.full_name if obj.client else None
+
+    def get_invoice_number(self, obj):
+        return obj.invoice_number or f"INV-{str(obj.id).split('-')[0].upper()}"
 
 
 class ClaimSerializer(serializers.ModelSerializer):
@@ -217,9 +258,31 @@ class ClaimCreateSerializer(serializers.ModelSerializer):
         fields = ['id', 'invoice_id', 'payer_name', 'payer_id']
         read_only_fields = ['id']
 
+    def validate(self, attrs):
+        invoice_id = attrs.get('invoice_id')
+        request = self.context.get('request')
+
+        try:
+            invoice = Invoice.objects.get(pk=invoice_id)
+        except Invoice.DoesNotExist as exc:
+            raise serializers.ValidationError({'invoice_id': 'Invoice not found.'}) from exc
+
+        if request and invoice.organization_id != request.user.organization_id:
+            raise serializers.ValidationError({'invoice_id': 'Invoice does not belong to your organization.'})
+
+        if getattr(invoice, 'status', '') == 'cancelled':
+            raise serializers.ValidationError({'invoice_id': 'Cancelled invoices cannot be submitted as claims.'})
+
+        attrs['invoice'] = invoice
+        return attrs
+
     def create(self, validated_data):
-        invoice = Invoice.objects.get(pk=validated_data['invoice_id'])
+        invoice = validated_data.pop('invoice')
+        validated_data.pop('invoice_id', None)
+        if not validated_data.get('payer_name'):
+            raise serializers.ValidationError({'payer_name': 'Payer name is required.'})
         validated_data['client'] = invoice.client
+        validated_data['invoice'] = invoice
         validated_data['billed_amount'] = invoice.total_amount
         return super().create(validated_data)
 
@@ -254,6 +317,11 @@ class BatchInvoiceSerializer(serializers.Serializer):
         child=serializers.UUIDField(),
         required=False,
     )
+
+    def validate(self, attrs):
+        if attrs['start_date'] > attrs['end_date']:
+            raise serializers.ValidationError({'end_date': 'End date must be on or after start date.'})
+        return attrs
 
 
 class StripePaymentSerializer(serializers.Serializer):

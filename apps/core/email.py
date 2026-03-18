@@ -188,13 +188,18 @@ class EmailService:
 
         sender = from_email or _format_from(org_name)
 
+        payload = {
+            'from': sender,
+            'to': to,
+            'subject': subject,
+            'html': html,
+        }
+        reply_to = getattr(settings, 'RESEND_REPLY_TO', '')
+        if reply_to:
+            payload['reply_to'] = reply_to
+
         try:
-            response = resend.Emails.send({
-                'from': sender,
-                'to': to,
-                'subject': subject,
-                'html': html,
-            })
+            response = resend.Emails.send(payload)
             # Resend v2 returns a SendResponse object with .id attribute
             email_id = getattr(response, 'id', None) or str(response)
             logger.info(f'Email sent to {to}: {subject} (id={email_id})')

@@ -6,7 +6,6 @@ failures, and refunds. Verifies signatures using STRIPE_WEBHOOK_SECRET.
 
 Endpoint: POST /api/v1/payments/webhook/
 """
-import json
 import logging
 from decimal import Decimal
 
@@ -22,6 +21,16 @@ from rest_framework.permissions import AllowAny
 from .models import Invoice, Payment
 
 logger = logging.getLogger(__name__)
+
+
+def _notify_payment_recorded(payment):
+    if not payment:
+        return
+    try:
+        from apps.notifications.services import notify_payment_recorded
+        notify_payment_recorded(payment)
+    except Exception:
+        pass
 
 
 @csrf_exempt
@@ -106,7 +115,7 @@ def _handle_payment_succeeded(payment_intent):
                 return
 
             # Create payment record
-            Payment.objects.create(
+            created_payment = Payment.objects.create(
                 invoice=invoice,
                 client=invoice.client,
                 amount=amount,
@@ -127,12 +136,14 @@ def _handle_payment_succeeded(payment_intent):
                 invoice.status = 'paid'
             elif invoice.paid_amount > 0:
                 invoice.status = 'partial'
-            invoice.save(update_fields=['status', 'updated_at'])
+            invoice.balance = max(invoice.total_amount - invoice.paid_amount, Decimal('0'))
+            invoice.save(update_fields=['status', 'balance', 'updated_at'])
 
         logger.info(
             f'Stripe payment recorded: ${amount} for invoice {invoice.invoice_number} '
             f'(PI: {payment_intent["id"]})'
         )
+        _notify_payment_recorded(created_payment)
 
     except Invoice.DoesNotExist:
         logger.error(f'Stripe webhook: invoice {invoice_id} not found for PI {payment_intent["id"]}')
@@ -207,7 +218,10 @@ def _handle_refund(charge):
                 invoice.paid_amount = 0
             elif invoice.paid_amount < invoice.total_amount:
                 invoice.status = 'partial'
-            invoice.save(update_fields=['status', 'paid_amount', 'updated_at'])
+            else:
+                invoice.status = 'paid'
+            invoice.balance = max(invoice.total_amount - invoice.paid_amount, Decimal('0'))
+            invoice.save(update_fields=['status', 'paid_amount', 'balance', 'updated_at'])
 
         logger.info(
             f'Stripe refund processed: ${refund_amount} for invoice '

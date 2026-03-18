@@ -4,11 +4,13 @@ Root URL Configuration for Sirena Health EHR.
 All API endpoints are under /api/v1/ prefix.
 User management moved to top-level /api/v1/users/ (not under /auth/).
 """
+import os
+
 from django.contrib import admin
 from django.urls import path, include
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path(f'{os.getenv("DJANGO_ADMIN_URL", "admin")}/', admin.site.urls),
 
     # API v1
     path('api/v1/auth/', include('apps.accounts.urls')),

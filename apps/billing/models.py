@@ -4,7 +4,9 @@ Billing models: Invoice, InvoiceItem, Payment, Claim.
 Matches backend.md §3 Billing tables (including claim-level payment fields).
 Coordinated with frontend types/billing.ts.
 """
+import uuid
 from django.db import models
+from django.utils import timezone
 from apps.core.models import OrganizationModel, BaseModel
 
 
@@ -32,6 +34,18 @@ class Invoice(OrganizationModel):
 
     def __str__(self):
         return f"Invoice #{self.invoice_number} — {self.client}"
+
+    @staticmethod
+    def generate_invoice_number():
+        while True:
+            candidate = f"INV-{timezone.now():%Y%m%d}-{uuid.uuid4().hex[:6].upper()}"
+            if not Invoice.objects.filter(invoice_number=candidate).exists():
+                return candidate
+
+    def save(self, *args, **kwargs):
+        if not self.invoice_number:
+            self.invoice_number = self.generate_invoice_number()
+        super().save(*args, **kwargs)
 
     def recalculate_balance(self):
         """Recalculate balance from payments."""

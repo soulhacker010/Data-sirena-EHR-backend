@@ -20,6 +20,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 
+from apps.clinical.services import DocumentStorageService
 from apps.core.permissions import IsFrontDesk
 from .models import Client, Authorization
 from .serializers import (
@@ -272,30 +273,45 @@ class ClientDocumentViewSet(viewsets.ModelViewSet):
         from apps.clients.models import Client
         from rest_framework.exceptions import NotFound, ValidationError
 
-        # FIX FU-4: Verify client exists in this org.
-        # DRF does NOT call get_queryset() on POST, so this check must live here.
-        # Without it, a fake client UUID would silently create a document and
-        # then fail at teardown with a FK violation.
         client_pk = self.kwargs['client_pk']
-        if not Client.objects.filter(
+        client = Client.objects.filter(
             id=client_pk,
             organization=self.request.user.organization,
-        ).exists():
+        ).only('id', 'first_name', 'last_name').first()
+        if not client:
             raise NotFound('Client not found.')
 
         file = self.request.FILES.get('file')
 
-        # FIX FU-3: Require a file — without this guard, the DB would crash
-        # with a NOT NULL violation on file_size (500 instead of 400).
         if not file:
             raise ValidationError({'file': 'A file is required for upload.'})
 
         self._validate_file(file)
+        upload_result = DocumentStorageService.upload_document(file, client)
         serializer.save(
             client_id=client_pk,
             uploaded_by=self.request.user,
             file_name=file.name,
             file_type=file.content_type or '',
             file_size=file.size,
-            file_path=f"documents/{file.name}",
+            file_path=upload_result['file_path'],
+            cloudinary_public_id=upload_result['cloudinary_public_id'],
         )
+
+    def perform_destroy(self, instance):
+        DocumentStorageService.delete_document(
+            cloudinary_public_id=instance.cloudinary_public_id,
+            file_name=instance.file_name,
+            file_type=instance.file_type,
+        )
+        instance.delete()
+
+    @action(detail=True, methods=['get'], url_path='access')
+    def access(self, request, client_pk=None, pk=None):
+        instance = self.get_object()
+        download = request.query_params.get('download', '').lower() in {'1', 'true', 'yes'}
+        access_url = DocumentStorageService.generate_access_url(
+            instance,
+            as_attachment=download,
+        )
+        return Response({'url': access_url})

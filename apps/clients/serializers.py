@@ -130,6 +130,7 @@ class ClientDetailSerializer(ClientSerializer):
                 'file_name': d.file_name,
                 'file_type': d.file_type,
                 'file_size': d.file_size,
+                'file_path': '' if d.cloudinary_public_id else d.file_path,
                 'document_type': d.document_type or '',
                 'is_signed': d.is_signed,
                 'created_at': d.created_at.isoformat(),
