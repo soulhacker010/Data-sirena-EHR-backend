@@ -5,6 +5,7 @@ Tests scheduling, rescheduling, status updates, double-booking prevention,
 and cross-org isolation.
 """
 import pytest
+from unittest.mock import patch
 from rest_framework import status
 
 
@@ -12,7 +13,8 @@ from rest_framework import status
 class TestAppointmentCreate:
     url = '/api/v1/appointments/'
 
-    def test_create_appointment(self, admin_client, sample_client, admin_user):
+    @patch('apps.core.email.EmailService.send_appointment_email')
+    def test_create_appointment(self, mock_send_appointment_email, admin_client, sample_client, admin_user):
         """Create appointment → 201."""
         resp = admin_client.post(self.url, {
             'client_id': str(sample_client.id),
@@ -25,6 +27,7 @@ class TestAppointmentCreate:
         assert resp.status_code == status.HTTP_201_CREATED
         assert 'client_id' in resp.data
         assert 'provider_id' in resp.data
+        mock_send_appointment_email.assert_called_once()
 
     def test_create_appointment_missing_client(self, admin_client, admin_user):
         """Missing client_id → 400."""
@@ -112,7 +115,8 @@ class TestAppointmentList:
 
 @pytest.mark.django_db
 class TestAppointmentUpdate:
-    def test_update_appointment(self, admin_client, sample_appointment):
+    @patch('apps.core.email.EmailService.send_appointment_email')
+    def test_update_appointment(self, mock_send_appointment_email, admin_client, sample_appointment):
         """Update appointment notes → 200."""
         url = f'/api/v1/appointments/{sample_appointment.id}/'
         resp = admin_client.put(url, {
@@ -125,7 +129,7 @@ class TestAppointmentUpdate:
             'notes': 'Rescheduled',
         })
         assert resp.status_code == status.HTTP_200_OK
-
+        mock_send_appointment_email.assert_called_once()
 
 @pytest.mark.django_db
 class TestAppointmentStatus:
@@ -145,8 +149,10 @@ class TestAppointmentStatus:
 
 @pytest.mark.django_db
 class TestAppointmentDelete:
-    def test_delete_appointment(self, admin_client, sample_appointment):
+    @patch('apps.core.email.EmailService.send_appointment_email')
+    def test_delete_appointment(self, mock_send_appointment_email, admin_client, sample_appointment):
         """Delete → 204."""
         url = f'/api/v1/appointments/{sample_appointment.id}/'
         resp = admin_client.delete(url)
         assert resp.status_code == status.HTTP_204_NO_CONTENT
+        mock_send_appointment_email.assert_called_once()

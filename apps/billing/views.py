@@ -425,11 +425,20 @@ class PaymentViewSet(viewsets.ModelViewSet):
         payment = serializer.save(invoice=invoice, client=invoice.client)
         # Recalculate invoice balance after payment
         payment.invoice.recalculate_balance()
+        payment = Payment.objects.select_related(
+            'invoice', 'client', 'invoice__organization'
+        ).get(pk=payment.pk)
         try:
             from apps.notifications.services import notify_payment_recorded
             notify_payment_recorded(payment)
         except Exception:
             pass
+        try:
+            from apps.core.email import EmailService
+            org_name = payment.invoice.organization.name if payment.invoice and payment.invoice.organization else 'Sirena Health'
+            EmailService.send_payment_receipt(payment, org_name=org_name)
+        except Exception:
+            logger.exception('Payment receipt email failed')
 
     @action(detail=False, methods=['post'], url_path='stripe')
     def create_stripe_payment(self, request):
@@ -604,6 +613,15 @@ class PaymentViewSet(viewsets.ModelViewSet):
                     notify_payment_recorded(created_payment)
                 except Exception:
                     pass
+                try:
+                    from apps.core.email import EmailService
+                    created_payment = Payment.objects.select_related(
+                        'invoice', 'client', 'invoice__organization'
+                    ).get(pk=created_payment.pk)
+                    org_name = created_payment.invoice.organization.name if created_payment.invoice and created_payment.invoice.organization else 'Sirena Health'
+                    EmailService.send_payment_receipt(created_payment, org_name=org_name)
+                except Exception:
+                    logger.exception('Stripe confirm payment receipt email failed')
             return Response({
                 'status': 'recorded',
                 'amount': str(amount),

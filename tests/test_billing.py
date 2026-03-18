@@ -2,6 +2,7 @@
 Billing endpoint tests — invoices, payments, claims.
 """
 import pytest
+from unittest.mock import patch
 from rest_framework import status
 
 
@@ -36,7 +37,8 @@ class TestInvoiceCreate:
 class TestPayment:
     url = '/api/v1/payments/'
 
-    def test_create_payment(self, admin_client, sample_client, org):
+    @patch('apps.core.email.EmailService.send_payment_receipt')
+    def test_create_payment(self, mock_send_payment_receipt, admin_client, sample_client, org):
         """Create payment against an invoice → 201."""
         from apps.billing.models import Invoice
         invoice = Invoice.objects.create(
@@ -54,6 +56,7 @@ class TestPayment:
             'payer_type': 'insurance',
         }, format='json')
         assert resp.status_code == status.HTTP_201_CREATED
+        assert mock_send_payment_receipt.called
 
 
 @pytest.mark.django_db

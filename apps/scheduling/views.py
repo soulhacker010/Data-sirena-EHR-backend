@@ -84,6 +84,25 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             )
         return response
 
+    def update(self, request, *args, **kwargs):
+        response = super().update(request, *args, **kwargs)
+        appointment = self.get_object()
+        self._send_appointment_email(appointment, event='updated')
+        return response
+
+    def destroy(self, request, *args, **kwargs):
+        appointment = self.get_object()
+        self._send_appointment_email(appointment, event='cancelled')
+        return super().destroy(request, *args, **kwargs)
+
+    def _send_appointment_email(self, appointment, *, event: str):
+        try:
+            from apps.core.email import EmailService
+            org_name = self.request.user.organization.name if self.request.user.organization else 'Sirena Health'
+            EmailService.send_appointment_email(appointment, event=event, org_name=org_name)
+        except Exception:
+            pass
+
     def perform_create(self, serializer):
         """
         FIX CT-3: Validate that client_id and provider_id belong to the user's org
@@ -164,6 +183,8 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             if instances:
                 Appointment.objects.bulk_create(instances)
 
+        self._send_appointment_email(appointment, event='scheduled')
+
     @action(detail=True, methods=['post'], url_path='status')
     def update_status(self, request, pk=None):
         """
@@ -219,4 +240,6 @@ class AppointmentViewSet(viewsets.ModelViewSet):
                     pass  # Never break the main flow for notifications
 
         appointment.refresh_from_db()
+        if new_status == 'cancelled' and old_status != 'cancelled':
+            self._send_appointment_email(appointment, event='cancelled')
         return Response(AppointmentSerializer(appointment).data)

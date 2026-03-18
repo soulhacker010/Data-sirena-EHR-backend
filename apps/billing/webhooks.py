@@ -144,6 +144,15 @@ def _handle_payment_succeeded(payment_intent):
             f'(PI: {payment_intent["id"]})'
         )
         _notify_payment_recorded(created_payment)
+        try:
+            from apps.core.email import EmailService
+            created_payment = Payment.objects.select_related(
+                'invoice', 'client', 'invoice__organization'
+            ).get(pk=created_payment.pk)
+            org_name = created_payment.invoice.organization.name if created_payment.invoice and created_payment.invoice.organization else 'Sirena Health'
+            EmailService.send_payment_receipt(created_payment, org_name=org_name)
+        except Exception:
+            logger.exception('Stripe webhook payment receipt email failed')
 
     except Invoice.DoesNotExist:
         logger.error(f'Stripe webhook: invoice {invoice_id} not found for PI {payment_intent["id"]}')

@@ -19,6 +19,7 @@ from typing import List, Optional
 
 import resend
 from django.conf import settings
+from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,12 @@ logger = logging.getLogger(__name__)
 PRIMARY = '#0D9488'
 PRIMARY_DARK = '#0F766E'
 PRIMARY_LIGHT = '#14B8A6'
+CYAN = '#0891B2'
 BG = '#F8FAFC'
 CARD = '#FFFFFF'
+SURFACE = '#F1F5F9'
+SURFACE_TINT = '#ECFEFF'
+SURFACE_WARM = '#FFFBEB'
 BORDER = '#E2E8F0'
 TEXT = '#0F172A'
 TEXT_SECONDARY = '#475569'
@@ -36,6 +41,7 @@ TEXT_MUTED = '#94A3B8'
 SUCCESS = '#10B981'
 WARNING = '#F59E0B'
 ERROR = '#EF4444'
+INFO = '#3B82F6'
 FONT_STACK = "'Nexa', system-ui, -apple-system, sans-serif"
 
 # Email validation pattern
@@ -87,6 +93,51 @@ def _money(value) -> str:
         return '0.00'
 
 
+def _datetime_label(value) -> str:
+    if not value:
+        return '-'
+    dt = timezone.localtime(value) if timezone.is_aware(value) else value
+    return dt.strftime('%B %d, %Y at %I:%M %p').replace(' 0', ' ')
+
+
+def _date_label(value) -> str:
+    if not value:
+        return '-'
+    return value.strftime('%B %d, %Y')
+
+
+def _initials(value: str) -> str:
+    parts = [part[:1].upper() for part in str(value or '').split() if part[:1]]
+    return ''.join(parts[:2]) or 'SH'
+
+
+def _section_card(content: str, *, accent: str = BORDER, background: str = CARD) -> str:
+    return f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:{background};border:1px solid {BORDER};border-top:3px solid {accent};border-radius:18px;box-shadow:0 10px 24px rgba(15,23,42,0.04)">
+        <tr>
+            <td style="padding:22px 24px">{content}</td>
+        </tr>
+    </table>'''
+
+
+def _info_row(label: str, value: str, *, emphasized: bool = False) -> str:
+    value_color = TEXT if emphasized else TEXT_SECONDARY
+    value_weight = '700' if emphasized else '600'
+    return f'''<tr>
+        <td style="padding:0 0 14px;color:{TEXT_MUTED};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">{_esc(label)}</td>
+        <td style="padding:0 0 14px;text-align:right;color:{value_color};font-size:14px;font-weight:{value_weight}">{value}</td>
+    </tr>'''
+
+
+def _cta_button(label: str, url: str) -> str:
+    return f'''<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 0">
+        <tr>
+            <td align="center" style="border-radius:12px;background:{PRIMARY_DARK}">
+                <a href="{_esc(url)}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:{PRIMARY_DARK};color:{CARD};font-size:14px;font-weight:700;letter-spacing:0.01em;text-decoration:none">{_esc(label)}</a>
+            </td>
+        </tr>
+    </table>'''
+
+
 def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Health') -> str:
     """
     Base email template matching the Sirena Health frontend design.
@@ -96,6 +147,7 @@ def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Hea
     """
     safe_org = _esc(org_name)
     safe_header = _esc(header_text)
+    org_initials = _initials(org_name)
 
     return f'''<!DOCTYPE html>
 <html lang="en">
@@ -104,36 +156,49 @@ def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Hea
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{safe_header}</title>
 </head>
-<body style="margin:0;padding:0;background-color:{BG};font-family:{FONT_STACK};-webkit-font-smoothing:antialiased">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background-color:{BG}">
+<body style="margin:0;padding:0;background-color:{BG};font-family:{FONT_STACK};-webkit-font-smoothing:antialiased;color:{TEXT}">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BG}">
         <tr>
-            <td align="center" style="padding:32px 16px">
-                <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">
-
-                    <!-- Header -->
+            <td align="center" style="padding:40px 16px 28px">
+                <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%">
                     <tr>
-                        <td style="background:{PRIMARY};padding:28px 32px;border-radius:12px 12px 0 0;text-align:center">
-                            <h1 style="margin:0;color:{CARD};font-size:20px;font-weight:700;letter-spacing:0.5px">{safe_org}</h1>
-                            <p style="margin:6px 0 0;color:rgba(255,255,255,0.8);font-size:13px;font-weight:400">{safe_header}</p>
+                        <td style="padding:0 0 20px;text-align:center">
+                            <span style="display:inline-block;padding:7px 12px;border-radius:999px;background:{CARD};border:1px solid rgba(13,148,136,0.12);color:{PRIMARY_DARK};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Sirena Health EHR</span>
                         </td>
                     </tr>
-
-                    <!-- Body -->
                     <tr>
-                        <td style="background:{CARD};padding:32px;border:1px solid {BORDER};border-top:none;border-radius:0 0 12px 12px">
+                        <td style="background:{CARD};padding:28px 30px;border:1px solid {BORDER};border-top:4px solid {PRIMARY};border-radius:28px 28px 0 0">
+                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                <tr>
+                                    <td style="vertical-align:top">
+                                        <table role="presentation" cellpadding="0" cellspacing="0">
+                                            <tr>
+                                                <td style="width:52px;height:52px;border-radius:16px;background:{SURFACE_TINT};border:1px solid rgba(13,148,136,0.18);text-align:center;color:{PRIMARY_DARK};font-size:20px;font-weight:700">{org_initials}</td>
+                                                <td style="width:16px"></td>
+                                                <td>
+                                                    <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase">Care coordination</p>
+                                                    <h1 style="margin:0;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">{safe_org}</h1>
+                                                    <p style="margin:8px 0 0;color:{TEXT_SECONDARY};font-size:15px;font-weight:600">{safe_header}</p>
+                                                </td>
+                                            </tr>
+                                        </table>
+                                    </td>
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background:{CARD};padding:36px 34px;border:1px solid {BORDER};border-top:none;border-radius:0 0 28px 28px;box-shadow:0 18px 40px rgba(15,23,42,0.08)">
                             {body_html}
                         </td>
                     </tr>
-
-                    <!-- Footer -->
                     <tr>
-                        <td style="padding:20px 32px;text-align:center">
-                            <p style="margin:0;color:{TEXT_MUTED};font-size:12px;font-weight:400">
-                                This email was sent by {safe_org}. Please do not reply to this email.
+                        <td style="padding:18px 18px 0;text-align:center">
+                            <p style="margin:0;color:{TEXT_MUTED};font-size:12px;font-weight:600;line-height:1.6">
+                                This message was sent by {safe_org}. If you need help, contact your organization administrator.
                             </p>
                         </td>
                     </tr>
-
                 </table>
             </td>
         </tr>
@@ -247,59 +312,47 @@ class EmailService:
         safe_org = _esc(org_name)
         safe_inv_num = _esc(invoice.invoice_number)
 
+        invoice_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Invoice number', f'#{safe_inv_num}', emphasized=True)}
+                {_info_row('Invoice date', invoice_date_str)}
+                {_info_row('Due date', due_date_str)}
+                {_info_row('Client', client_name)}
+            </table>''',
+            accent=PRIMARY,
+            background=SURFACE,
+        )
+        totals_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Total', f'${_money(invoice.total_amount)}', emphasized=True)}
+                {_info_row('Paid', f'${_money(invoice.paid_amount)}')}
+                <tr>
+                    <td style="padding:16px 0 0;color:{PRIMARY_DARK};font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;border-top:1px solid {BORDER}">Balance due</td>
+                    <td style="padding:16px 0 0;text-align:right;color:{PRIMARY_DARK};font-size:26px;font-weight:700;border-top:1px solid {BORDER}">${_money(invoice.balance)}</td>
+                </tr>
+            </table>''',
+            accent=CYAN,
+            background=SURFACE_TINT,
+        )
+
         body = f'''
-            <p style="margin:0 0 16px;color:{TEXT};font-size:14px">Dear {client_name},</p>
-            <p style="margin:0 0 20px;color:{TEXT_SECONDARY};font-size:14px">Please find your invoice details below.</p>
-
-            <!-- Invoice Info -->
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:20px">
-                <tr>
-                    <td style="padding:8px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Invoice Number</td>
-                    <td style="padding:8px 0;text-align:right;color:{TEXT};font-size:14px;font-weight:600">#{safe_inv_num}</td>
-                </tr>
-                <tr>
-                    <td style="padding:8px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Invoice Date</td>
-                    <td style="padding:8px 0;text-align:right;color:{TEXT};font-size:14px">{invoice_date_str}</td>
-                </tr>
-                <tr>
-                    <td style="padding:8px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Due Date</td>
-                    <td style="padding:8px 0;text-align:right;color:{TEXT};font-size:14px">{due_date_str}</td>
-                </tr>
-            </table>
-
-            <!-- Line Items Table -->
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {BORDER};border-radius:8px;overflow:hidden;margin-bottom:20px">
+            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Billing summary</p>
+            <p style="margin:0 0 8px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Invoice #{safe_inv_num}</p>
+            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, here is your invoice summary from {safe_org}. The details below are organized for quick review.</p>
+            {invoice_summary}
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border:1px solid {BORDER};border-radius:16px;overflow:hidden;background:{CARD}">
                 <tr style="background:{BG}">
-                    <th style="padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600;border-bottom:2px solid {BORDER}">Code</th>
-                    <th style="padding:10px 12px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600;border-bottom:2px solid {BORDER}">Description</th>
-                    <th style="padding:10px 12px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600;border-bottom:2px solid {BORDER}">Units</th>
-                    <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600;border-bottom:2px solid {BORDER}">Rate</th>
-                    <th style="padding:10px 12px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600;border-bottom:2px solid {BORDER}">Amount</th>
+                    <th style="padding:14px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Code</th>
+                    <th style="padding:14px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Description</th>
+                    <th style="padding:14px 14px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Units</th>
+                    <th style="padding:14px 14px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Rate</th>
+                    <th style="padding:14px 14px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Amount</th>
                 </tr>
                 {items_rows}
             </table>
-
-            <!-- Totals -->
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BG};border:1px solid {BORDER};border-radius:8px;overflow:hidden">
-                <tr>
-                    <td style="padding:12px 16px;color:{TEXT_SECONDARY};font-size:14px">Total</td>
-                    <td style="padding:12px 16px;text-align:right;color:{TEXT};font-size:14px;font-weight:600">${_money(invoice.total_amount)}</td>
-                </tr>
-                <tr>
-                    <td style="padding:12px 16px;color:{SUCCESS};font-size:14px">Paid</td>
-                    <td style="padding:12px 16px;text-align:right;color:{SUCCESS};font-size:14px">${_money(invoice.paid_amount)}</td>
-                </tr>
-                <tr style="border-top:2px solid {BORDER}">
-                    <td style="padding:14px 16px;color:{PRIMARY_DARK};font-size:16px;font-weight:700">Balance Due</td>
-                    <td style="padding:14px 16px;text-align:right;color:{PRIMARY_DARK};font-size:16px;font-weight:700">${_money(invoice.balance)}</td>
-                </tr>
-            </table>
-
-            <p style="margin:24px 0 0;color:{TEXT_MUTED};font-size:13px">
-                If you have any questions about this invoice, please don't hesitate to contact us.
-            </p>
-            <p style="margin:12px 0 0;color:{TEXT_MUTED};font-size:13px">
-                Thank you,<br><span style="color:{TEXT};font-weight:600">{safe_org}</span>
+            {totals_summary}
+            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you have any questions about this invoice, please reach out to your care team and they can help you review the details.</p>
+            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
             </p>
         '''
 
@@ -329,48 +382,39 @@ class EmailService:
         safe_org = _esc(org_name)
         safe_first = _esc(user.first_name)
         safe_email = _esc(user.email)
+        workspace_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/') or '#'
 
         password_section = ''
         if temp_password:
             # FIX #9: Only show masked password in logs, full in email
             logger.info(f'Welcome email to {user.email} includes temp password (masked)')
-            password_section = f'''
-            <div style="background:{BG};border:1px solid {BORDER};border-left:4px solid {WARNING};padding:16px;border-radius:0 8px 8px 0;margin:20px 0">
-                <p style="margin:0;font-size:12px;text-transform:uppercase;letter-spacing:0.5px;color:{TEXT_MUTED};font-weight:600">Temporary Password</p>
-                <p style="margin:8px 0 0;font-family:monospace;font-size:16px;color:{TEXT};font-weight:700;letter-spacing:1px">{_esc(temp_password)}</p>
-                <p style="margin:8px 0 0;font-size:12px;color:{TEXT_MUTED}">Please change this after your first login.</p>
-            </div>
-            '''
+            password_section = _section_card(
+                f'''<p style="margin:0 0 8px;color:{WARNING};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">Temporary password</p>
+                <p style="margin:0 0 10px;padding:14px 16px;border-radius:12px;background:{CARD};border:1px solid rgba(245,158,11,0.25);font-family:Consolas,Monaco,monospace;font-size:24px;line-height:1.2;color:{TEXT};font-weight:700;letter-spacing:0.08em">{_esc(temp_password)}</p>
+                <p style="margin:0;color:{TEXT_SECONDARY};font-size:13px;line-height:1.6;font-weight:600">Use this once, then change it immediately after your first sign-in.</p>''',
+                accent=WARNING,
+                background=SURFACE_WARM,
+            )
 
         role_display = user.get_role_display() if hasattr(user, 'get_role_display') else str(user.role)
+        account_summary = _section_card(
+            f'''<p style="margin:0 0 16px;color:{TEXT};font-size:16px;font-weight:700">Account details</p>
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Email', safe_email, emphasized=True)}
+                {_info_row('Role', _esc(role_display))}
+            </table>''',
+            accent=PRIMARY,
+            background=SURFACE,
+        )
 
         body = f'''
-            <p style="margin:0 0 8px;color:{TEXT};font-size:18px;font-weight:700">Welcome, {safe_first}!</p>
-            <p style="margin:0 0 20px;color:{TEXT_SECONDARY};font-size:14px">
-                Your account has been created for <span style="color:{PRIMARY};font-weight:600">{safe_org}</span>.
-            </p>
-
-            <!-- Account Details -->
-            <div style="background:{BG};border:1px solid {BORDER};border-radius:8px;padding:16px;margin:0 0 20px">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                        <td style="padding:6px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Email</td>
-                        <td style="padding:6px 0;text-align:right;color:{TEXT};font-size:14px;font-weight:600">{safe_email}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding:6px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Role</td>
-                        <td style="padding:6px 0;text-align:right;color:{TEXT};font-size:14px">{_esc(role_display)}</td>
-                    </tr>
-                </table>
-            </div>
-
+            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Welcome, {safe_first}.</p>
+            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Your account for <span style="color:{PRIMARY_DARK};font-weight:700">{safe_org}</span> is ready. Below is everything you need to sign in and get started.</p>
+            {account_summary}
             {password_section}
-
-            <p style="margin:20px 0 0;color:{TEXT_MUTED};font-size:13px">
-                If you have any questions, please contact your administrator.
-            </p>
-            <p style="margin:12px 0 0;color:{TEXT_MUTED};font-size:13px">
-                Best regards,<br><span style="color:{TEXT};font-weight:600">{safe_org}</span>
+            {_cta_button('Open Workspace', workspace_url)}
+            <p style="margin:22px 0 0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you need access help or your temporary password has expired, please contact your administrator.</p>
+            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Best regards,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
             </p>
         '''
 
@@ -400,41 +444,31 @@ class EmailService:
         safe_org = _esc(org_name)
         safe_inv_num = _esc(invoice.invoice_number)
 
+        reminder_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Invoice', f'#{safe_inv_num}', emphasized=True)}
+                {_info_row('Total', f'${_money(invoice.total_amount)}')}
+                {_info_row('Paid', f'${_money(invoice.paid_amount)}')}
+            </table>''',
+            accent=PRIMARY,
+            background=SURFACE,
+        )
+        balance_summary = _section_card(
+            f'''<p style="margin:0 0 8px;color:{WARNING};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">Balance due</p>
+            <p style="margin:0;color:{TEXT};font-size:32px;line-height:1.1;font-weight:700">${_money(invoice.balance)}</p>
+            <p style="margin:10px 0 0;color:{TEXT_SECONDARY};font-size:13px;line-height:1.6;font-weight:600">Please review the balance and contact the clinic if you need help arranging payment.</p>''',
+            accent=WARNING,
+            background=SURFACE_WARM,
+        )
+
         body = f'''
-            <p style="margin:0 0 16px;color:{TEXT};font-size:14px">Dear {client_name},</p>
-            <p style="margin:0 0 20px;color:{TEXT_SECONDARY};font-size:14px">
-                This is a friendly reminder that the following invoice has an outstanding balance.
-            </p>
-
-            <!-- Invoice Summary -->
-            <div style="background:{BG};border:1px solid {BORDER};border-left:4px solid {PRIMARY};padding:16px;border-radius:0 8px 8px 0;margin:0 0 20px">
-                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                    <tr>
-                        <td style="padding:6px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Invoice</td>
-                        <td style="padding:6px 0;text-align:right;color:{TEXT};font-size:14px;font-weight:600">#{safe_inv_num}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding:6px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Total</td>
-                        <td style="padding:6px 0;text-align:right;color:{TEXT};font-size:14px">${_money(invoice.total_amount)}</td>
-                    </tr>
-                    <tr>
-                        <td style="padding:6px 0;color:{TEXT_MUTED};font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Paid</td>
-                        <td style="padding:6px 0;text-align:right;color:{SUCCESS};font-size:14px">${_money(invoice.paid_amount)}</td>
-                    </tr>
-                </table>
-            </div>
-
-            <!-- Balance Due - Highlighted -->
-            <div style="background:{PRIMARY};border-radius:8px;padding:16px;text-align:center;margin:0 0 20px">
-                <p style="margin:0;color:rgba(255,255,255,0.8);font-size:12px;text-transform:uppercase;letter-spacing:0.5px">Balance Due</p>
-                <p style="margin:6px 0 0;color:{CARD};font-size:24px;font-weight:700">${_money(invoice.balance)}</p>
-            </div>
-
-            <p style="margin:0 0 0;color:{TEXT_SECONDARY};font-size:14px">
-                Please contact us if you have any questions or need to arrange a payment plan.
-            </p>
-            <p style="margin:12px 0 0;color:{TEXT_MUTED};font-size:13px">
-                Thank you,<br><span style="color:{TEXT};font-weight:600">{safe_org}</span>
+            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Account notice</p>
+            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Payment reminder</p>
+            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, this is a friendly reminder that invoice <span style="color:{TEXT};font-weight:700">#{safe_inv_num}</span> still has an outstanding balance.</p>
+            {reminder_summary}
+            {balance_summary}
+            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you have any questions or need to arrange a payment plan, please contact {safe_org} and the team will help you.</p>
+            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
             </p>
         '''
 
@@ -442,5 +476,104 @@ class EmailService:
             to=[invoice.client.email],
             subject=f'Payment Reminder - Invoice #{invoice.invoice_number}',
             html=_base_template('Payment Reminder', body, org_name),
+            org_name=org_name,
+        )
+
+    @classmethod
+    def send_payment_receipt(cls, payment, org_name: str = 'Sirena Health'):
+        if not getattr(payment, 'client', None) or not payment.client.email:
+            logger.warning(f'Payment {payment} — client has no email, skipping receipt')
+            return None
+
+        invoice = payment.invoice
+        client_name = _esc(payment.client.full_name)
+        safe_org = _esc(org_name)
+        safe_invoice = _esc(invoice.invoice_number if invoice else '')
+        method_label = _esc(payment.payment_method or payment.payer_type or 'Recorded payment')
+
+        receipt_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Invoice', f'#{safe_invoice}', emphasized=True)}
+                {_info_row('Payment date', _datetime_label(payment.payment_date))}
+                {_info_row('Method', method_label)}
+                {_info_row('Reference', _esc(payment.reference_number) or '-')}
+            </table>''',
+            accent=PRIMARY,
+            background=SURFACE,
+        )
+        balance_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Amount received', f'${_money(payment.amount)}', emphasized=True)}
+                {_info_row('Total paid', f'${_money(invoice.paid_amount if invoice else payment.amount)}')}
+                {_info_row('Remaining balance', f'${_money(invoice.balance if invoice else 0)}')}
+            </table>''',
+            accent=SUCCESS,
+            background=SURFACE_TINT,
+        )
+
+        body = f'''
+            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Payment receipt</p>
+            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Payment received</p>
+            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, we recorded your payment for invoice <span style="color:{TEXT};font-weight:700">#{safe_invoice}</span>. Your updated balance details are below.</p>
+            {receipt_summary}
+            {balance_summary}
+            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you believe anything looks incorrect, please contact {safe_org} so the billing team can review it with you.</p>
+            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span></p>
+        '''
+
+        return cls.send_generic(
+            to=[payment.client.email],
+            subject=f'Payment Receipt - Invoice #{invoice.invoice_number}',
+            html=_base_template('Payment Receipt', body, org_name),
+            org_name=org_name,
+        )
+
+    @classmethod
+    def send_appointment_email(cls, appointment, *, event: str, org_name: str = 'Sirena Health'):
+        if not getattr(appointment, 'client', None) or not appointment.client.email:
+            logger.warning(f'Appointment {appointment} — client has no email, skipping appointment email')
+            return None
+
+        client_name = _esc(appointment.client.full_name)
+        provider_name = _esc(getattr(appointment.provider, 'full_name', '') or 'Care team')
+        location_name = _esc(getattr(appointment.location, 'name', '') or 'Clinic location will be confirmed')
+        safe_org = _esc(org_name)
+        service_code = _esc(appointment.service_code) or 'Scheduled visit'
+        status_copy = {
+            'scheduled': ('Appointment Scheduled', 'Your appointment has been scheduled.'),
+            'updated': ('Appointment Updated', 'Your appointment details were updated.'),
+            'cancelled': ('Appointment Cancelled', 'Your appointment has been cancelled.'),
+        }
+        header_text, intro = status_copy.get(event, ('Appointment Update', 'Your appointment information has changed.'))
+
+        appointment_summary = _section_card(
+            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                {_info_row('Date and time', _datetime_label(appointment.start_time), emphasized=True)}
+                {_info_row('Ends', _datetime_label(appointment.end_time))}
+                {_info_row('Provider', provider_name)}
+                {_info_row('Location', location_name)}
+                {_info_row('Service', service_code)}
+            </table>''',
+            accent=PRIMARY,
+            background=SURFACE,
+        )
+
+        closing = 'If you have any questions, please contact your care team.'
+        if event == 'cancelled':
+            closing = 'If you need to reschedule, please contact your care team and they will help arrange a new time.'
+
+        body = f'''
+            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Schedule update</p>
+            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">{_esc(header_text)}</p>
+            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, {intro} Please review the appointment details below from {safe_org}.</p>
+            {appointment_summary}
+            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">{closing}</p>
+            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span></p>
+        '''
+
+        return cls.send_generic(
+            to=[appointment.client.email],
+            subject=header_text,
+            html=_base_template(header_text, body, org_name),
             org_name=org_name,
         )

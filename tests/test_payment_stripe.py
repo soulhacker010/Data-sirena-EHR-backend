@@ -209,13 +209,14 @@ class TestStripePaymentIntent:
 class TestWebhookPaymentSucceeded:
     """Simulate Stripe webhook: payment_intent.succeeded."""
 
-    def test_payment_recorded(self, sample_invoice, sample_client):
+    @patch('apps.core.email.EmailService.send_payment_receipt')
+    def test_payment_recorded(self, mock_send_payment_receipt, sample_invoice, sample_client):
         """Webhook records payment and updates invoice status."""
         from apps.billing.webhooks import _handle_payment_succeeded
 
         pi = {
             'id': 'pi_test_success_001',
-            'amount_received': 50000,  # $500 in cents
+            'amount_received': 50000,
             'metadata': {
                 'invoice_id': str(sample_invoice.id),
                 'organization_id': str(sample_invoice.organization_id),
@@ -223,15 +224,14 @@ class TestWebhookPaymentSucceeded:
         }
         _handle_payment_succeeded(pi)
 
-        # Verify payment was created
         payment = Payment.objects.get(reference_number='pi_test_success_001')
         assert payment.amount == Decimal('500.00')
         assert payment.payment_method == 'stripe'
 
-        # Verify invoice updated to 'paid'
         sample_invoice.refresh_from_db()
         assert sample_invoice.status == 'paid'
         assert sample_invoice.paid_amount == Decimal('500.00')
+        mock_send_payment_receipt.assert_called_once()
 
     def test_partial_payment(self, sample_invoice, sample_client):
         """Partial payment → invoice status = 'partial'."""
