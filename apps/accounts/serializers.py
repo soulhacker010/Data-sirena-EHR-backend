@@ -31,6 +31,13 @@ class LoginSerializer(serializers.Serializer):
         return attrs
 
 
+class ProfileUpdateSerializer(serializers.ModelSerializer):
+    """For users updating their own profile (first_name, last_name only)."""
+    class Meta:
+        model = User
+        fields = ['first_name', 'last_name']
+
+
 class ChangePasswordSerializer(serializers.Serializer):
     """Validates password change request."""
     current_password = serializers.CharField(write_only=True)

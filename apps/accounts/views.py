@@ -31,6 +31,7 @@ from .serializers import (
     UserSerializer,
     UserCreateSerializer,
     UserUpdateSerializer,
+    ProfileUpdateSerializer,
     ChangePasswordSerializer,
     OrganizationSerializer,
 )
@@ -70,15 +71,19 @@ class LoginView(generics.GenericAPIView):
         })
 
 
-class MeView(generics.RetrieveAPIView):
+class MeView(generics.RetrieveUpdateAPIView):
     """
-    GET /api/v1/auth/me/
+    GET /api/v1/auth/me/  → Returns the currently authenticated user's profile.
+    PUT /api/v1/auth/me/  → Updates the user's own first_name, last_name.
 
-    Returns the currently authenticated user's profile.
-    Called by AuthContext on app load.
+    Called by AuthContext on app load (GET) and SettingsPage profile save (PUT).
     """
     permission_classes = [IsAuthenticated]
-    serializer_class = UserSerializer
+
+    def get_serializer_class(self):
+        if self.request.method in ('PUT', 'PATCH'):
+            return ProfileUpdateSerializer
+        return UserSerializer
 
     def get_object(self):
         return self.request.user
