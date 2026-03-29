@@ -1,10 +1,13 @@
-import cloudinary
-import cloudinary.uploader
-from cloudinary.utils import private_download_url
+import logging
+
+import boto3
+from botocore.exceptions import ClientError
 from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
 from rest_framework.exceptions import ValidationError
+
+logger = logging.getLogger(__name__)
 
 
 class NoteSigningService:
@@ -110,106 +113,100 @@ class NoteSigningService:
 
 
 class DocumentStorageService:
-    ACCESS_URL_TTL_SECONDS = 300
+    """Handles document upload/download/delete via AWS S3."""
 
     @staticmethod
-    def _configure_cloudinary():
-        config = settings.CLOUDINARY_STORAGE
-        cloudinary.config(
-            cloud_name=config.get('CLOUD_NAME', ''),
-            api_key=config.get('API_KEY', ''),
-            api_secret=config.get('API_SECRET', ''),
-            secure=True,
+    def _get_s3_client():
+        return boto3.client(
+            's3',
+            aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
+            aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
+            region_name=settings.AWS_S3_REGION_NAME,
+            config=boto3.session.Config(signature_version=settings.AWS_S3_SIGNATURE_VERSION),
         )
 
     @staticmethod
-    def _is_cloudinary_configured():
-        config = settings.CLOUDINARY_STORAGE
-        return all([
-            config.get('CLOUD_NAME') and config.get('CLOUD_NAME') != 'placeholder',
-            config.get('API_KEY') and config.get('API_KEY') != 'placeholder',
-            config.get('API_SECRET') and config.get('API_SECRET') != 'placeholder',
-        ])
+    def _is_configured():
+        return bool(
+            settings.AWS_ACCESS_KEY_ID
+            and settings.AWS_SECRET_ACCESS_KEY
+            and settings.AWS_STORAGE_BUCKET_NAME
+        )
 
     @staticmethod
-    def _get_resource_type(file_name, content_type=''):
-        mime = (content_type or '').lower()
-        lower_name = (file_name or '').lower()
-        if mime.startswith('image/') or lower_name.endswith(('.jpg', '.jpeg', '.png')):
-            return 'image'
-        return 'raw'
-
-    @staticmethod
-    def _get_file_format(file_name):
-        if not file_name or '.' not in file_name:
-            raise ValidationError({'file': 'Document format could not be determined.'})
-        return file_name.rsplit('.', 1)[1].lower()
-
-    @staticmethod
-    def _build_folder(client):
-        date_folder = timezone.now().strftime('%Y-%m-%d')
+    def _build_s3_key(client, file_name):
+        date_folder = timezone.now().strftime('%Y/%m')
         client_name = f'{getattr(client, "first_name", "")} {getattr(client, "last_name", "")}'.strip()
         client_slug = slugify(client_name) or f'client-{client.id}'
-        return f'sirena/client-documents/{date_folder}/{client_slug}-{client.id}'
+        safe_name = slugify(file_name.rsplit('.', 1)[0]) if '.' in file_name else slugify(file_name)
+        ext = file_name.rsplit('.', 1)[1].lower() if '.' in file_name else ''
+        ts = int(timezone.now().timestamp())
+        return f'documents/{date_folder}/{client_slug}-{client.id}/{safe_name}-{ts}.{ext}'
 
     @classmethod
     def upload_document(cls, file, client):
-        if not cls._is_cloudinary_configured():
+        if not cls._is_configured():
             return {
                 'file_path': f'documents/{file.name}',
-                'cloudinary_public_id': '',
+                's3_key': '',
             }
 
-        cls._configure_cloudinary()
-        upload_result = cloudinary.uploader.upload(
-            file,
-            folder=cls._build_folder(client),
-            resource_type='auto',
-            type='authenticated',
-            use_filename=True,
-            unique_filename=True,
-            overwrite=False,
-        )
-        public_id = upload_result.get('public_id')
-        if not public_id:
+        s3_key = cls._build_s3_key(client, file.name)
+        try:
+            s3 = cls._get_s3_client()
+            s3.put_object(
+                Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                Key=s3_key,
+                Body=file.read(),
+                ContentType=file.content_type or 'application/octet-stream',
+            )
+        except ClientError as exc:
+            logger.error('S3 upload failed: %s', exc)
             raise ValidationError({'file': 'Document upload failed. Please try again.'})
+
         return {
-            'file_path': '',
-            'cloudinary_public_id': public_id,
+            'file_path': s3_key,
+            's3_key': s3_key,
         }
 
     @classmethod
-    def delete_document(cls, *, cloudinary_public_id, file_name, file_type=''):
-        if not cloudinary_public_id or not cls._is_cloudinary_configured():
+    def delete_document(cls, *, s3_key, **_kwargs):
+        if not s3_key or not cls._is_configured():
             return
 
-        cls._configure_cloudinary()
-        result = cloudinary.uploader.destroy(
-            cloudinary_public_id,
-            resource_type=cls._get_resource_type(file_name, file_type),
-            type='authenticated',
-            invalidate=True,
-        )
-        if result.get('result') not in {'ok', 'not found'}:
+        try:
+            s3 = cls._get_s3_client()
+            s3.delete_object(
+                Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+                Key=s3_key,
+            )
+        except ClientError as exc:
+            logger.error('S3 delete failed: %s', exc)
             raise ValidationError({'file': 'Document deletion failed. Please try again.'})
 
     @classmethod
     def generate_access_url(cls, document, *, as_attachment=False):
-        if not document.cloudinary_public_id or not cls._is_cloudinary_configured():
-            if not document.file_path:
-                raise ValidationError({'file': 'Document access is unavailable.'})
-            return document.file_path
+        key = document.s3_key or document.file_path
+        if not key or not cls._is_configured():
+            raise ValidationError({'file': 'Document access is unavailable.'})
 
-        cls._configure_cloudinary()
-        expires_at = int(timezone.now().timestamp()) + cls.ACCESS_URL_TTL_SECONDS
-        signed_url = private_download_url(
-            document.cloudinary_public_id,
-            cls._get_file_format(document.file_name),
-            resource_type=cls._get_resource_type(document.file_name, document.file_type),
-            type='authenticated',
-            expires_at=expires_at,
-            attachment=as_attachment,
-        )
-        if not signed_url:
+        try:
+            s3 = cls._get_s3_client()
+            params = {
+                'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+                'Key': key,
+            }
+            if as_attachment:
+                params['ResponseContentDisposition'] = (
+                    f'attachment; filename="{document.file_name}"'
+                )
+            url = s3.generate_presigned_url(
+                'get_object',
+                Params=params,
+                ExpiresIn=settings.AWS_QUERYSTRING_EXPIRE,
+            )
+        except ClientError as exc:
+            logger.error('S3 presigned URL failed: %s', exc)
             raise ValidationError({'file': 'Document access could not be generated.'})
-        return signed_url
+
+        return url

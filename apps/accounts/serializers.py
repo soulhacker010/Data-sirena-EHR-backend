@@ -8,7 +8,7 @@ Coordinates with frontend types in src/types/user.ts:
 """
 from django.contrib.auth import authenticate
 from rest_framework import serializers
-from .models import Organization, User, NPI, Location
+from .models import Organization, User, NPI, Location, NotificationPreference
 
 
 # ─── Auth Serializers ───────────────────────────────────────────────────────────
@@ -32,10 +32,10 @@ class LoginSerializer(serializers.Serializer):
 
 
 class ProfileUpdateSerializer(serializers.ModelSerializer):
-    """For users updating their own profile (first_name, last_name only)."""
+    """For users updating their own profile."""
     class Meta:
         model = User
-        fields = ['first_name', 'last_name']
+        fields = ['first_name', 'last_name', 'phone']
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -151,3 +151,12 @@ class LocationSerializer(serializers.ModelSerializer):
             'state', 'zip_code', 'is_telehealth', 'is_active',
         ]
         read_only_fields = ['id', 'organization']
+
+
+class NotificationPreferenceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = NotificationPreference
+        fields = [
+            'email_appointments', 'email_billing', 'email_notes',
+            'sms_reminders', 'auth_alerts', 'denial_alerts',
+        ]

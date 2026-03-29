@@ -124,3 +124,26 @@ class Location(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({'Telehealth' if self.is_telehealth else self.city})"
+
+
+class NotificationPreference(models.Model):
+    """Per-user notification preferences."""
+    user = models.OneToOneField(
+        User,
+        on_delete=models.CASCADE,
+        related_name='notification_preferences',
+        primary_key=True,
+    )
+    email_appointments = models.BooleanField(default=True)
+    email_billing = models.BooleanField(default=True)
+    email_notes = models.BooleanField(default=False)
+    sms_reminders = models.BooleanField(default=True)
+    auth_alerts = models.BooleanField(default=True)
+    denial_alerts = models.BooleanField(default=True)
+
+    class Meta:
+        verbose_name = 'Notification Preference'
+        verbose_name_plural = 'Notification Preferences'
+
+    def __str__(self):
+        return f"NotificationPreferences({self.user})"

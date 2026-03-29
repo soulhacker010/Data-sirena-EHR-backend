@@ -701,11 +701,17 @@ class ClaimViewSet(viewsets.ModelViewSet):
         if claim.status == 'denied':
             claim.resubmission_count += 1
             claim.status = 'resubmitted'
+            notes = request.data.get('resubmission_notes', '')
+            if notes:
+                claim.resubmission_notes = notes
         else:
             claim.status = 'submitted'
 
         claim.submitted_at = timezone.now()
-        claim.save(update_fields=['status', 'submitted_at', 'resubmission_count', 'updated_at'])
+        claim.save(update_fields=[
+            'status', 'submitted_at', 'resubmission_count',
+            'resubmission_notes', 'updated_at',
+        ])
         return Response(ClaimSerializer(claim).data)
 
     @action(detail=True, methods=['post'], url_path='post-payment')

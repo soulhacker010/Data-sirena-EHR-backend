@@ -9,6 +9,8 @@ Coordinates with frontend:
 - GET  /api/v1/auth/organization/   → SettingsPage → settingsApi.getOrganization()
 - PUT  /api/v1/auth/organization/   → SettingsPage → settingsApi.updateOrganization()
 - GET/POST /api/v1/users/           → AdminUsersPage → userApi (via admin)
+- GET  /api/v1/auth/locations/      → LocationSelect → lookupsApi.getLocations()
+- GET  /api/v1/auth/providers/      → ProviderSelect → lookupsApi.getProviders()
 
 Hardening fixes applied:
 - FIX #8:  Admin cannot deactivate themselves
@@ -17,7 +19,7 @@ Hardening fixes applied:
 import logging
 
 from django.utils import timezone
-from rest_framework import generics, status, viewsets
+from rest_framework import generics, serializers as drf_serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -25,7 +27,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.permissions import IsAdmin
-from .models import User
+from .models import User, Location, NotificationPreference
 from .serializers import (
     LoginSerializer,
     UserSerializer,
@@ -34,6 +36,8 @@ from .serializers import (
     ProfileUpdateSerializer,
     ChangePasswordSerializer,
     OrganizationSerializer,
+    LocationSerializer,
+    NotificationPreferenceSerializer,
 )
 
 
@@ -226,3 +230,78 @@ class UserViewSet(viewsets.ModelViewSet):
 
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+
+
+# ─── Lookup endpoints (any authenticated user) ────────────────────────────────
+
+class LocationListView(generics.ListAPIView):
+    """
+    GET /api/v1/auth/locations/
+
+    Returns active locations for the current user's organization.
+    Used by LocationSelect dropdown in notes and appointments.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = LocationSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return Location.objects.filter(
+            organization=self.request.user.organization,
+            is_active=True,
+        )
+
+
+class _ProviderSerializer(drf_serializers.ModelSerializer):
+    """Lightweight read-only serializer for provider dropdown."""
+    name = drf_serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ['id', 'name', 'first_name', 'last_name', 'role', 'credentials']
+        read_only_fields = fields
+
+    def get_name(self, obj):
+        return f"{obj.first_name} {obj.last_name}".strip()
+
+
+class ProviderListView(generics.ListAPIView):
+    """
+    GET /api/v1/auth/providers/
+
+    Returns active staff members (providers) for the current user's organization.
+    Used by ProviderSelect dropdown in notes and appointments.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = _ProviderSerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return User.objects.filter(
+            organization=self.request.user.organization,
+            is_active=True,
+            role__in=['admin', 'supervisor', 'clinician'],
+        ).order_by('last_name', 'first_name')
+
+
+class NotificationPreferenceView(APIView):
+    """
+    GET  /api/v1/auth/notifications/preferences/
+    PUT  /api/v1/auth/notifications/preferences/
+
+    Returns or updates notification preferences for the current user.
+    Auto-creates default preferences on first access.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
+        serializer = NotificationPreferenceSerializer(prefs)
+        return Response(serializer.data)
+
+    def put(self, request):
+        prefs, _ = NotificationPreference.objects.get_or_create(user=request.user)
+        serializer = NotificationPreferenceSerializer(prefs, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)

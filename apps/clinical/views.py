@@ -263,16 +263,14 @@ class DocumentViewSet(viewsets.ModelViewSet):
                 file_type=file.content_type or '',
                 file_size=file.size,
                 file_path=upload_result['file_path'],
-                cloudinary_public_id=upload_result['cloudinary_public_id'],
+                s3_key=upload_result['s3_key'],
             )
         else:
             serializer.save(uploaded_by=self.request.user)
 
     def perform_destroy(self, instance):
         DocumentStorageService.delete_document(
-            cloudinary_public_id=instance.cloudinary_public_id,
-            file_name=instance.file_name,
-            file_type=instance.file_type,
+            s3_key=instance.s3_key,
         )
         instance.delete()
 

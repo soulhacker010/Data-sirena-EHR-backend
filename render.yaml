@@ -52,13 +52,52 @@ services:
         value: no-reply@sirenahealthehr.com
       - key: RESEND_REPLY_TO
         sync: false
-      - key: CLOUDINARY_CLOUD_NAME
+      - key: AWS_ACCESS_KEY_ID
         sync: false
-      - key: CLOUDINARY_API_KEY
+      - key: AWS_SECRET_ACCESS_KEY
         sync: false
-      - key: CLOUDINARY_API_SECRET
+      - key: AWS_STORAGE_BUCKET_NAME
         sync: false
+      - key: AWS_S3_REGION_NAME
+        value: us-east-1
       - key: REDIS_URL
         sync: false
+      - key: PYTHON_VERSION
+        value: "3.10.0"
+
+  # Celery worker — processes background tasks (emails, claims, etc.)
+  - type: worker
+    name: sirena-ehr-worker
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: celery -A config worker --loglevel=info --concurrency=2
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.production
+      - key: DJANGO_SECRET_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sirena-ehr-db
+          property: connectionURI
+      - key: DATABASE_SSL_REQUIRE
+        value: "true"
+      - key: REDIS_URL
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: DEFAULT_FROM_EMAIL
+        value: no-reply@sirenahealthehr.com
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_STORAGE_BUCKET_NAME
+        sync: false
+      - key: AWS_S3_REGION_NAME
+        value: us-east-1
       - key: PYTHON_VERSION
         value: "3.10.0"

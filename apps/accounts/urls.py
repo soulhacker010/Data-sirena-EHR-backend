@@ -8,7 +8,12 @@ User management:    /api/v1/auth/users/ (admin-only)
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
-from .views import LoginView, LogoutView, MeView, ChangePasswordView, OrganizationSettingsView, UserViewSet
+from .views import (
+    LoginView, LogoutView, MeView, ChangePasswordView,
+    OrganizationSettingsView, UserViewSet,
+    LocationListView, ProviderListView,
+    NotificationPreferenceView,
+)
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
@@ -21,6 +26,11 @@ urlpatterns = [
     path('me/', MeView.as_view(), name='me'),
     path('password/', ChangePasswordView.as_view(), name='change-password'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
+
+    # Lookup endpoints (any authenticated user)
+    path('locations/', LocationListView.as_view(), name='location-list'),
+    path('providers/', ProviderListView.as_view(), name='provider-list'),
+    path('notifications/preferences/', NotificationPreferenceView.as_view(), name='notification-preferences'),
 
     # User management (admin)
     path('', include(router.urls)),

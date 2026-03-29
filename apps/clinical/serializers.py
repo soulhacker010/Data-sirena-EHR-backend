@@ -256,6 +256,4 @@ class DocumentSerializer(serializers.ModelSerializer):
         return obj.uploaded_by.full_name if obj.uploaded_by else None
 
     def get_file_path(self, obj):
-        if obj.cloudinary_public_id:
-            return ''
-        return obj.file_path
+        return obj.file_path or ''

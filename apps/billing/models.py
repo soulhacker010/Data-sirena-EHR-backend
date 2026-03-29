@@ -191,6 +191,7 @@ class Claim(BaseModel):
     response_data = models.JSONField(null=True, blank=True)
     denial_reason = models.TextField(blank=True, default='')
     resubmission_count = models.IntegerField(default=0)
+    resubmission_notes = models.TextField(blank=True, default='')
     paid_at = models.DateTimeField(null=True, blank=True)
 
     class Meta(BaseModel.Meta):

@@ -133,7 +133,7 @@ class TreatmentPlan(BaseModel):
 
 class Document(BaseModel):
     """
-    Client document (uploaded to Cloudinary).
+    Client document (uploaded to AWS S3).
 
     Supports signed documents for consent forms, etc.
     """
@@ -150,8 +150,8 @@ class Document(BaseModel):
     file_name = models.CharField(max_length=255)
     file_type = models.CharField(max_length=50)
     file_size = models.IntegerField()
-    file_path = models.TextField()  # Cloudinary URL
-    cloudinary_public_id = models.CharField(max_length=255, blank=True, default='')
+    file_path = models.TextField()  # S3 key path
+    s3_key = models.CharField(max_length=500, blank=True, default='')
     document_type = models.CharField(max_length=100, blank=True, default='')
     is_signed = models.BooleanField(default=False)
     signature_data = models.TextField(blank=True, default='')

@@ -228,7 +228,7 @@ class ClaimSerializer(serializers.ModelSerializer):
             'insurance_paid', 'patient_responsibility', 'write_off_amount',
             'remaining_balance',
             'submitted_at', 'response_data', 'denial_reason',
-            'resubmission_count', 'paid_at',
+            'resubmission_count', 'resubmission_notes', 'paid_at',
             'service_code', 'session_date',
             'created_at', 'updated_at',
         ]

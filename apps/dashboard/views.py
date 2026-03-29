@@ -33,14 +33,28 @@ class DashboardStatsView(APIView):
         from apps.billing.models import Invoice, Claim, Payment
         from apps.audit.models import AuditLog
 
+        # Clinicians see only their own data; others see org-wide
+        is_clinician = request.user.role == 'clinician'
+
         # Core stats
-        total_clients = Client.objects.filter(organization=org, is_active=True).count()
-        sessions_this_month = Appointment.objects.filter(
+        if is_clinician:
+            # Count distinct clients the clinician has appointments with
+            total_clients = Client.objects.filter(
+                organization=org, is_active=True,
+                appointments__provider=request.user,
+            ).distinct().count()
+        else:
+            total_clients = Client.objects.filter(organization=org, is_active=True).count()
+
+        sessions_qs = Appointment.objects.filter(
             organization=org,
             start_time__gte=month_start,
             status='attended',
-        ).count()
-        if request.user.role == 'clinician':
+        )
+        if is_clinician:
+            sessions_qs = sessions_qs.filter(provider=request.user)
+        sessions_this_month = sessions_qs.count()
+        if is_clinician:
             pending_notes = SessionNote.objects.filter(
                 client__organization=org,
             ).filter(
@@ -63,12 +77,15 @@ class DashboardStatsView(APIView):
         ).aggregate(total=Sum('amount'))['total'] or 0
 
         # Upcoming appointments (next 7 days)
-        upcoming = Appointment.objects.filter(
+        upcoming_qs = Appointment.objects.filter(
             organization=org,
             start_time__gte=now,
             start_time__lte=now + timedelta(days=7),
             status='scheduled',
-        ).select_related('client', 'provider').order_by('start_time')[:5]
+        )
+        if is_clinician:
+            upcoming_qs = upcoming_qs.filter(provider=request.user)
+        upcoming = upcoming_qs.select_related('client', 'provider').order_by('start_time')[:5]
 
         upcoming_data = [
             {
