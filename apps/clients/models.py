@@ -15,6 +15,14 @@ class Client(OrganizationModel):
 
     Organization-scoped for multi-tenancy.
     """
+    mrn = models.CharField(
+        max_length=20,
+        blank=True,
+        default='',
+        db_index=True,
+        verbose_name='Medical Record Number',
+        help_text='Auto-generated unique patient chart number',
+    )
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     date_of_birth = models.DateField()
@@ -63,6 +71,17 @@ class Client(OrganizationModel):
     @property
     def full_name(self):
         return f"{self.first_name} {self.last_name}"
+
+    def save(self, *args, **kwargs):
+        if not self.mrn:
+            last = Client.objects.filter(
+                organization=self.organization,
+            ).order_by('-mrn').values_list('mrn', flat=True).first()
+            if last and last.isdigit():
+                self.mrn = str(int(last) + 1).zfill(6)
+            else:
+                self.mrn = '000001'
+        super().save(*args, **kwargs)
 
 
 class Authorization(BaseModel):

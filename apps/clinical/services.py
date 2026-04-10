@@ -19,9 +19,10 @@ class NoteSigningService:
         Store a co-sign request on a signed note.
 
         This keeps the request lightweight without introducing a new model.
+        Co-sign requests are allowed on locked-signed notes (part of signing workflow).
         """
-        if note.is_locked:
-            raise ValueError('Note is already locked and cannot be modified')
+        if note.status == 'co_signed':
+            raise ValueError('Note is already co-signed and cannot be modified')
 
         if note.status != 'signed':
             raise ValueError('Note must be signed before co-sign can be requested')
@@ -69,9 +70,11 @@ class NoteSigningService:
         note.signature_data = signature_data
         note.signed_at = timezone.now()
         note.status = 'signed'
+        note.is_locked = True
         note.version += 1
         note.save(update_fields=[
-            'signature_data', 'signed_at', 'status', 'version', 'updated_at'
+            'signature_data', 'signed_at', 'status', 'is_locked', 'version',
+            'updated_at',
         ])
 
         return note
@@ -107,6 +110,41 @@ class NoteSigningService:
         note.save(update_fields=[
             'supervisor_signature', 'co_signed_at', 'co_signed_by',
             'status', 'is_locked', 'version', 'note_data', 'updated_at'
+        ])
+
+        return note
+
+
+    @staticmethod
+    def unlock_note(note, admin_user):
+        """
+        Admin-only: unlock a signed/co-signed note for revision.
+
+        Records the unlock event in note_data for audit trail.
+        """
+        if not note.is_locked:
+            raise ValueError('Note is not locked')
+
+        if admin_user.role != 'admin':
+            raise ValueError('Only administrators can unlock notes')
+
+        note_data = dict(note.note_data or {})
+        audit_log = note_data.get('audit_log', [])
+        audit_log.append({
+            'action': 'unlocked',
+            'by_id': str(admin_user.id),
+            'by_name': admin_user.full_name,
+            'at': timezone.now().isoformat(),
+            'previous_status': note.status,
+        })
+        note_data['audit_log'] = audit_log
+
+        note.is_locked = False
+        note.status = 'draft'
+        note.note_data = note_data
+        note.version += 1
+        note.save(update_fields=[
+            'is_locked', 'status', 'note_data', 'version', 'updated_at',
         ])
 
         return note

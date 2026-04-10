@@ -7,7 +7,7 @@ Frontend expects:
 - Plus computed: template_name, co_signer_name, service_code, session_date
 """
 from rest_framework import serializers
-from .models import NoteTemplate, SessionNote, TreatmentPlan, Document
+from .models import NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment, Document
 
 
 class SessionNoteFieldsMixin:
@@ -114,7 +114,7 @@ class SessionNoteSerializer(SessionNoteFieldsMixin, serializers.ModelSerializer)
 
 class SessionNoteWriteSerializer(serializers.ModelSerializer):
     appointment_id = serializers.UUIDField(required=False, allow_null=True)
-    client_id = serializers.UUIDField(required=False)
+    client_id = serializers.UUIDField(required=True)
     template_id = serializers.UUIDField(required=False, allow_null=True)
     service_code = serializers.CharField(required=False, allow_blank=True)
     session_date = serializers.DateField(required=False, allow_null=True)
@@ -209,19 +209,162 @@ class CoSignNoteSerializer(serializers.Serializer):
         return attrs
 
 
-class TreatmentPlanSerializer(serializers.ModelSerializer):
-    """Matches frontend TreatmentPlan type."""
+class IntakeAssessmentSerializer(serializers.ModelSerializer):
+    """Full intake assessment — matches frontend IntakeAssessment type."""
     client_id = serializers.UUIDField(source='client.id', read_only=True)
+    client_name = serializers.SerializerMethodField()
     provider_id = serializers.UUIDField(source='provider.id', read_only=True)
+    provider_name = serializers.SerializerMethodField()
+    co_signer_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = IntakeAssessment
+        fields = [
+            'id', 'client_id', 'client_name', 'provider_id', 'provider_name',
+            'assessment_date', 'intake_data', 'status', 'is_locked',
+            'signature_data', 'signed_at',
+            'co_signed_by', 'co_signer_name', 'co_signed_at', 'supervisor_signature',
+            'client_signature', 'client_signed_at',
+            'version', 'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'client_id', 'provider_id',
+            'signature_data', 'signed_at',
+            'co_signed_by', 'co_signed_at', 'supervisor_signature',
+            'client_signature', 'client_signed_at',
+            'is_locked', 'version', 'created_at', 'updated_at',
+        ]
+
+    def get_client_name(self, obj):
+        return obj.client.full_name if obj.client else None
+
+    def get_provider_name(self, obj):
+        return obj.provider.full_name if obj.provider else None
+
+    def get_co_signer_name(self, obj):
+        return obj.co_signed_by.full_name if obj.co_signed_by else None
+
+
+class IntakeAssessmentWriteSerializer(serializers.ModelSerializer):
+    """For creating/updating intake assessments."""
+    client_id = serializers.UUIDField(required=True)
+
+    class Meta:
+        model = IntakeAssessment
+        fields = ['id', 'client_id', 'assessment_date', 'intake_data', 'status']
+        read_only_fields = ['id']
+
+    def create(self, validated_data):
+        from apps.clients.models import Client
+        client_id = validated_data.pop('client_id')
+        client = Client.objects.get(id=client_id)
+        return IntakeAssessment.objects.create(client=client, **validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop('client_id', None)  # Can't change client
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+    def to_representation(self, instance):
+        return IntakeAssessmentSerializer(instance, context=self.context).data
+
+
+class IntakeAssessmentListSerializer(serializers.ModelSerializer):
+    """Lightweight list view for intake assessments."""
+    client_id = serializers.UUIDField(source='client.id', read_only=True)
+    client_name = serializers.SerializerMethodField()
+    provider_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = IntakeAssessment
+        fields = [
+            'id', 'client_id', 'client_name', 'provider_name',
+            'assessment_date', 'status', 'is_locked', 'created_at',
+        ]
+
+    def get_client_name(self, obj):
+        return obj.client.full_name if obj.client else None
+
+    def get_provider_name(self, obj):
+        return obj.provider.full_name if obj.provider else None
+
+
+class TreatmentPlanSerializer(serializers.ModelSerializer):
+    """Full read serializer for Treatment Plan (BUILD 4)."""
+    client_id = serializers.UUIDField(source='client.id', read_only=True)
+    client_name = serializers.SerializerMethodField()
+    provider_id = serializers.UUIDField(source='provider.id', read_only=True)
+    provider_name = serializers.SerializerMethodField()
+    co_signer_name = serializers.SerializerMethodField()
 
     class Meta:
         model = TreatmentPlan
         fields = [
-            'id', 'client_id', 'provider_id', 'goals',
-            'start_date', 'review_date', 'is_active',
+            'id', 'client_id', 'client_name', 'provider_id', 'provider_name',
+            'from_intake', 'goals', 'plan_data',
+            'start_date', 'review_date', 'is_active', 'version', 'status',
+            'is_locked', 'signature_data', 'signed_at',
+            'co_signed_by', 'co_signer_name', 'co_signed_at', 'supervisor_signature',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_client_name(self, obj):
+        return obj.client.full_name if obj.client else None
+
+    def get_provider_name(self, obj):
+        return obj.provider.full_name if obj.provider else None
+
+    def get_co_signer_name(self, obj):
+        return obj.co_signed_by.full_name if obj.co_signed_by else None
+
+
+class TreatmentPlanWriteSerializer(serializers.ModelSerializer):
+    """Write serializer for Treatment Plan create/update."""
+    client_id = serializers.UUIDField(required=True)
+    from_intake = serializers.UUIDField(required=False, allow_null=True)
+
+    class Meta:
+        model = TreatmentPlan
+        fields = [
+            'client_id', 'from_intake', 'goals', 'plan_data',
+            'start_date', 'review_date', 'is_active', 'version',
+        ]
+
+    def create(self, validated_data):
+        client_id = validated_data.pop('client_id', None)
+        if client_id:
+            validated_data['client_id'] = client_id
+        return TreatmentPlan.objects.create(**validated_data)
+
+    def update(self, instance, validated_data):
+        validated_data.pop('client_id', None)
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+        return instance
+
+
+class TreatmentPlanListSerializer(serializers.ModelSerializer):
+    """Lightweight list serializer for Treatment Plan."""
+    client_name = serializers.SerializerMethodField()
+    provider_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = TreatmentPlan
+        fields = [
+            'id', 'client_name', 'provider_name',
+            'start_date', 'review_date', 'is_active', 'version', 'status',
+            'is_locked', 'created_at',
+        ]
+
+    def get_client_name(self, obj):
+        return obj.client.full_name if obj.client else None
+
+    def get_provider_name(self, obj):
+        return obj.provider.full_name if obj.provider else None
 
 
 class DocumentSerializer(serializers.ModelSerializer):

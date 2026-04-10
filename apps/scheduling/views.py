@@ -53,16 +53,22 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if end_date:
             qs = qs.filter(start_time__lte=end_date)
 
-        # Provider / client / status filtering
+        # Provider / client / status / service_code / location filtering
         provider_id = self.request.query_params.get('provider_id')
         client_id = self.request.query_params.get('client_id')
         appt_status = self.request.query_params.get('status')
+        service_code = self.request.query_params.get('service_code')
+        location_id = self.request.query_params.get('location_id')
         if provider_id:
             qs = qs.filter(provider_id=provider_id)
         if client_id:
             qs = qs.filter(client_id=client_id)
         if appt_status:
             qs = qs.filter(status=appt_status)
+        if service_code:
+            qs = qs.filter(service_code=service_code)
+        if location_id:
+            qs = qs.filter(location_id=location_id)
 
         return qs
 
@@ -243,3 +249,24 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         if new_status == 'cancelled' and old_status != 'cancelled':
             self._send_appointment_email(appointment, event='cancelled')
         return Response(AppointmentSerializer(appointment).data)
+
+    @action(detail=True, methods=['post'], url_path='cancel-series')
+    def cancel_series(self, request, pk=None):
+        """
+        POST /api/v1/appointments/{id}/cancel-series/
+
+        Cancel all future scheduled appointments sharing the same series_id.
+        """
+        appointment = self.get_object()
+        if not appointment.series_id:
+            return Response(
+                {'detail': 'This appointment is not part of a recurring series.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        from django.utils import timezone
+        cancelled_count = Appointment.objects.filter(
+            series_id=appointment.series_id,
+            status='scheduled',
+            start_time__gte=timezone.now(),
+        ).update(status='cancelled')
+        return Response({'cancelled': cancelled_count})

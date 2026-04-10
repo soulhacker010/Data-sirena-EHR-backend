@@ -27,7 +27,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from apps.core.permissions import IsAdmin
-from .models import User, Location, NotificationPreference
+from .models import User, Location, NPI, NotificationPreference
 from .serializers import (
     LoginSerializer,
     UserSerializer,
@@ -186,7 +186,6 @@ class UserViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         """Create user and send welcome email."""
-        import logging
         logger = logging.getLogger(__name__)
 
         request_org = self.request.user.organization_id
@@ -250,6 +249,36 @@ class LocationListView(generics.ListAPIView):
             organization=self.request.user.organization,
             is_active=True,
         )
+
+
+class _NPISerializer(drf_serializers.ModelSerializer):
+    """Read/write serializer for NPI management."""
+    class Meta:
+        model = NPI
+        fields = ['id', 'npi_number', 'business_name', 'is_active']
+        read_only_fields = ['id']
+
+
+class NPIViewSet(viewsets.ModelViewSet):
+    """
+    NPI management for the current user's organization.
+
+    GET    /api/v1/auth/npis/        → list all NPIs
+    POST   /api/v1/auth/npis/        → add new NPI
+    PUT    /api/v1/auth/npis/{id}/   → update NPI
+    DELETE /api/v1/auth/npis/{id}/   → remove NPI
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = _NPISerializer
+    pagination_class = None
+
+    def get_queryset(self):
+        return NPI.objects.filter(
+            organization=self.request.user.organization,
+        )
+
+    def perform_create(self, serializer):
+        serializer.save(organization=self.request.user.organization)
 
 
 class _ProviderSerializer(drf_serializers.ModelSerializer):

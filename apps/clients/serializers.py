@@ -54,7 +54,7 @@ class ClientListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
         fields = [
-            'id', 'organization_id', 'first_name', 'last_name', 'full_name',
+            'id', 'organization_id', 'mrn', 'first_name', 'last_name', 'full_name',
             'date_of_birth', 'age', 'gender', 'address', 'city', 'state', 'zip_code',
             'phone', 'email',
             'emergency_contact_name', 'emergency_contact_phone',
@@ -161,7 +161,7 @@ class ClientCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
         fields = [
-            'id', 'first_name', 'last_name', 'date_of_birth', 'gender',
+            'id', 'mrn', 'first_name', 'last_name', 'date_of_birth', 'gender',
             'address', 'city', 'state', 'zip_code', 'phone', 'email',
             'emergency_contact_name', 'emergency_contact_phone',
             'insurance_primary_name', 'insurance_primary_id', 'insurance_primary_group',

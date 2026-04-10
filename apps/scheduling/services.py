@@ -3,6 +3,7 @@ Recurrence generator for creating recurring appointment series.
 
 Handles daily, weekly, biweekly, and monthly patterns.
 """
+import uuid
 from datetime import timedelta
 from django.utils import timezone
 
@@ -22,11 +23,11 @@ class RecurrenceGenerator:
                     "frequency": "weekly",
                     "days": [1, 3, 5],
                     "end_date": "2026-06-30",
-                    "series_id": "uuid"
                 }
 
         Returns:
-            List of Appointment instances (not yet saved)
+            List of Appointment instances (not yet saved).
+            Also sets series_id on the template appointment.
         """
         from .models import Appointment
         from datetime import datetime
@@ -34,6 +35,11 @@ class RecurrenceGenerator:
         frequency = pattern.get('frequency', 'weekly')
         end_date_str = pattern.get('end_date')
         days = pattern.get('days', [])
+
+        # Generate a shared series_id for all instances
+        sid = uuid.uuid4()
+        appointment.series_id = sid
+        appointment.save(update_fields=['series_id'])
 
         if not end_date_str:
             return []
@@ -97,6 +103,7 @@ class RecurrenceGenerator:
                 status='scheduled',
                 is_recurring=True,
                 recurrence_pattern=pattern,
+                series_id=sid,
             )
             instances.append(instance)
 

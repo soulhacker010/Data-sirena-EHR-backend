@@ -10,13 +10,14 @@ from rest_framework.routers import DefaultRouter
 from rest_framework_simplejwt.views import TokenRefreshView
 from .views import (
     LoginView, LogoutView, MeView, ChangePasswordView,
-    OrganizationSettingsView, UserViewSet,
+    OrganizationSettingsView, UserViewSet, NPIViewSet,
     LocationListView, ProviderListView,
     NotificationPreferenceView,
 )
 
 router = DefaultRouter()
 router.register(r'users', UserViewSet, basename='user')
+router.register(r'npis', NPIViewSet, basename='npi')
 
 urlpatterns = [
     # Auth

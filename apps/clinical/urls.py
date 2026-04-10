@@ -12,12 +12,16 @@ Coordinated with frontend api/notes.ts:
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import NoteTemplateViewSet, SessionNoteViewSet, TreatmentPlanViewSet, DocumentViewSet
+from .views import (
+    NoteTemplateViewSet, SessionNoteViewSet, TreatmentPlanViewSet,
+    IntakeAssessmentViewSet, DocumentViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'note-templates', NoteTemplateViewSet, basename='note-template')
 router.register(r'notes', SessionNoteViewSet, basename='session-note')
 router.register(r'treatment-plans', TreatmentPlanViewSet, basename='treatment-plan')
+router.register(r'intakes', IntakeAssessmentViewSet, basename='intake-assessment')
 router.register(r'documents', DocumentViewSet, basename='document')
 
 # Frontend calls GET /notes/templates/ — add an alias

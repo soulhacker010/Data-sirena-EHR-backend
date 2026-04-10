@@ -54,6 +54,14 @@ class Appointment(OrganizationModel):
     start_time = models.DateTimeField()
     end_time = models.DateTimeField()
     service_code = models.CharField(max_length=50, blank=True, default='')
+    modifiers = models.CharField(
+        max_length=50, blank=True, default='',
+        help_text='CPT modifiers (e.g., -95 for telehealth, GO/GP/GN for therapy)'
+    )
+    place_of_service = models.CharField(
+        max_length=2, blank=True, default='11',
+        help_text='Place of Service code (e.g., 11=Office, 02=Telehealth, 12=Home)'
+    )
     units = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='scheduled')
     notes = models.TextField(blank=True, default='')
@@ -61,6 +69,10 @@ class Appointment(OrganizationModel):
     # Recurring appointment fields
     is_recurring = models.BooleanField(default=False)
     recurrence_pattern = models.JSONField(null=True, blank=True)
+    series_id = models.UUIDField(
+        null=True, blank=True, db_index=True,
+        help_text='Groups recurring appointment instances into a series',
+    )
 
     class Meta(OrganizationModel.Meta):
         ordering = ['start_time']
@@ -68,6 +80,7 @@ class Appointment(OrganizationModel):
             models.Index(fields=['organization', 'start_time', 'end_time']),
             models.Index(fields=['client']),
             models.Index(fields=['provider']),
+            models.Index(fields=['service_code']),
         ]
 
     def __str__(self):

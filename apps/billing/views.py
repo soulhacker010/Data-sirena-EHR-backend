@@ -24,6 +24,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
+from rest_framework.views import APIView
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,7 @@ from .serializers import (
     StripePaymentSerializer,
 )
 from .service_catalog import resolve_billing_defaults
+from .cpt_catalog import CPTCatalog
 
 # Statuses that block financial operations
 BLOCKED_STATUSES = ('cancelled', 'voided', 'void')
@@ -315,21 +317,13 @@ class InvoiceViewSet(viewsets.ModelViewSet):
 
         from apps.core.email import EmailService
 
-        org_name = request.organization.name if request.organization else 'Sirena Health'
-
         try:
             EmailService.send_invoice_email(invoice, to_email=to_email, org_name=org_name)
-            return Response({'status': 'sent', 'to_email': to_email})
-        except ValueError as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response(status=status.HTTP_204_NO_CONTENT)
         except Exception as e:
-            logger.error(f'Invoice email failed: {e}', exc_info=True)
             return Response(
-                {'error': 'Failed to send email. Please try again.'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                {'detail': f'Failed to write off claim: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
     @action(detail=True, methods=['get'], url_path='download-pdf',
@@ -850,3 +844,88 @@ class ClientClaimsView(generics.ListAPIView):
             client_id=self.kwargs['client_id'],
             client__organization=self.request.user.organization,
         ).select_related('invoice')
+
+
+class CPTSuggestionView(APIView):
+    """
+    BUILD 6.1: Auto-suggest CPT codes based on specialty, duration, and type.
+    
+    GET /api/v1/billing/cpt-suggestions/
+    Query params:
+        - specialty: Provider specialty (e.g., 'aba', 'psychiatry')
+        - duration: Appointment duration in minutes
+        - service_type: Type of service (e.g., 'evaluation', 'individual_therapy')
+        - is_initial: Whether this is an initial visit (true/false)
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get CPT code suggestions based on criteria."""
+        specialty = request.query_params.get('specialty')
+        duration = request.query_params.get('duration')
+        service_type = request.query_params.get('service_type')
+        is_initial = request.query_params.get('is_initial', 'false').lower() == 'true'
+        
+        # Convert duration to int if provided
+        duration_minutes = None
+        if duration:
+            try:
+                duration_minutes = int(duration)
+            except ValueError:
+                return Response(
+                    {'detail': 'Duration must be a number'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        # Get suggestions
+        suggestions = CPTCatalog.suggest_codes(
+            specialty=specialty,
+            duration_minutes=duration_minutes,
+            service_type=service_type,
+            is_initial=is_initial
+        )
+        
+        # Remove internal score field from response
+        for suggestion in suggestions:
+            suggestion.pop('score', None)
+        
+        return Response(suggestions)
+
+
+class ModifierSuggestionView(APIView):
+    """
+    BUILD 6.2: Auto-suggest CPT modifiers based on service type and delivery method.
+    
+    GET /api/v1/billing/modifier-suggestions/
+    Query params:
+        - code: CPT code
+        - is_telehealth: Whether service is via telehealth (true/false)
+        - telehealth_type: Type of telehealth (default, audio_only, store_forward, cms)
+        - provider_type: Provider specialty (ot, pt, st)
+        - is_assistant: Whether provider is an assistant (true/false)
+    """
+    permission_classes = [IsAuthenticated]
+    
+    def get(self, request):
+        """Get modifier suggestions based on criteria."""
+        code = request.query_params.get('code', '')
+        is_telehealth = request.query_params.get('is_telehealth', 'false').lower() == 'true'
+        telehealth_type = request.query_params.get('telehealth_type', 'default')
+        provider_type = request.query_params.get('provider_type')
+        is_assistant = request.query_params.get('is_assistant', 'false').lower() == 'true'
+        
+        if not code:
+            return Response(
+                {'detail': 'CPT code is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        modifiers = CPTCatalog.suggest_modifiers(
+            code=code,
+            is_telehealth=is_telehealth,
+            telehealth_type=telehealth_type,
+            provider_type=provider_type,
+            is_assistant=is_assistant
+        )
+        
+        return Response({'modifiers': modifiers})

@@ -63,8 +63,8 @@ class AppointmentSerializer(serializers.ModelSerializer):
             'id', 'organization_id',
             'client', 'provider', 'location', 'authorization',
             'start_time', 'end_time', 'duration_minutes',
-            'service_code', 'units', 'status', 'notes',
-            'is_recurring', 'recurrence_pattern',
+            'service_code', 'modifiers', 'place_of_service', 'units', 'status', 'notes',
+            'is_recurring', 'recurrence_pattern', 'series_id',
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'organization_id', 'created_at', 'updated_at']
@@ -79,12 +79,17 @@ class AppointmentCreateSerializer(serializers.ModelSerializer):
     provider_id = serializers.UUIDField(write_only=False)
     location_id = serializers.UUIDField(required=False, allow_null=True)
     authorization_id = serializers.UUIDField(required=False, allow_null=True)
+    service_code = serializers.CharField(required=False, allow_blank=True)
+    modifiers = serializers.CharField(required=False, allow_blank=True)
+    units = serializers.DecimalField(
+        max_digits=5, decimal_places=2, required=False, allow_null=True
+    )
 
     class Meta:
         model = Appointment
         fields = [
             'client_id', 'provider_id', 'location_id', 'authorization_id',
-            'start_time', 'end_time', 'service_code', 'units',
+            'start_time', 'end_time', 'service_code', 'modifiers', 'place_of_service', 'units',
             'notes', 'is_recurring', 'recurrence_pattern',
         ]
 
@@ -102,8 +107,8 @@ class AppointmentListSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'organization_id',
             'client', 'provider', 'location', 'authorization',
-            'start_time', 'end_time', 'service_code', 'units',
-            'status', 'notes', 'is_recurring', 'recurrence_pattern',
+            'start_time', 'end_time', 'service_code', 'modifiers', 'place_of_service', 'units',
+            'status', 'notes', 'is_recurring', 'recurrence_pattern', 'series_id',
             'created_at', 'updated_at',
         ]
 
