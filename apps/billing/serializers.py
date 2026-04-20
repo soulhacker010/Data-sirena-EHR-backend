@@ -324,9 +324,3 @@ class BatchInvoiceSerializer(serializers.Serializer):
         return attrs
 
 
-class StripePaymentSerializer(serializers.Serializer):
-    """For creating Stripe payment intents — matches StripePaymentPayload."""
-    invoice_id = serializers.UUIDField()
-    amount = serializers.DecimalField(
-        max_digits=10, decimal_places=2, min_value=Decimal('0.50'),
-    )  # Stripe minimum is $0.50

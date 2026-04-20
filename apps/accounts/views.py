@@ -18,7 +18,10 @@ Hardening fixes applied:
 """
 import logging
 
+from django.contrib.auth.tokens import default_token_generator
 from django.utils import timezone
+from django.utils.encoding import force_bytes, force_str
+from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import generics, serializers as drf_serializers, status, viewsets
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -229,6 +232,78 @@ class UserViewSet(viewsets.ModelViewSet):
 
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+
+
+class PasswordResetRequestView(APIView):
+    """
+    POST /api/v1/auth/password-reset/
+
+    Sends a password reset email. Always returns 200 to avoid email enumeration.
+    """
+    permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
+
+    def post(self, request):
+        email = (request.data.get('email') or '').strip().lower()
+        generic_response = Response(
+            {'message': 'If an account with that email exists, a reset link has been sent.'}
+        )
+
+        if not email:
+            return generic_response
+
+        try:
+            user = User.objects.get(email=email, is_active=True)
+        except User.DoesNotExist:
+            return generic_response
+
+        uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+        token = default_token_generator.make_token(user)
+
+        try:
+            from django.conf import settings
+            from apps.core.email import EmailService
+            frontend_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/')
+            reset_url = f'{frontend_url}/reset-password?uid={uid}&token={token}'
+            org_name = user.organization.name if user.organization else 'Sirena Health'
+            EmailService.send_password_reset_email(user, reset_url, org_name=org_name)
+        except Exception as e:
+            logging.getLogger(__name__).error(f'Password reset email failed for {email}: {e}')
+
+        return generic_response
+
+
+class PasswordResetConfirmView(APIView):
+    """
+    POST /api/v1/auth/password-reset/confirm/
+
+    Validates the token and sets a new password.
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        uid_b64 = request.data.get('uid', '')
+        token = request.data.get('token', '')
+        new_password = request.data.get('new_password', '')
+
+        if not uid_b64 or not token or not new_password:
+            return Response({'error': 'uid, token, and new_password are required.'}, status=400)
+
+        if len(new_password) < 8:
+            return Response({'error': 'Password must be at least 8 characters.'}, status=400)
+
+        try:
+            uid_str = force_str(urlsafe_base64_decode(uid_b64))
+            user = User.objects.get(pk=uid_str, is_active=True)
+        except (User.DoesNotExist, ValueError, TypeError):
+            return Response({'error': 'Invalid or expired reset link.'}, status=400)
+
+        if not default_token_generator.check_token(user, token):
+            return Response({'error': 'Invalid or expired reset link.'}, status=400)
+
+        user.set_password(new_password)
+        user.save(update_fields=['password'])
+        return Response({'message': 'Password reset successfully. You can now sign in.'})
 
 
 # ─── Lookup endpoints (any authenticated user) ────────────────────────────────

@@ -1,9 +1,12 @@
 """
-Auth endpoint tests — login, me, refresh, logout, password change.
+Auth endpoint tests — login, me, refresh, logout, password change, password reset.
 
 These tests verify the complete authentication flow that the frontend relies on.
 """
 import pytest
+from django.contrib.auth.tokens import default_token_generator
+from django.utils.encoding import force_bytes
+from django.utils.http import urlsafe_base64_encode
 from rest_framework import status
 
 
@@ -118,5 +121,98 @@ class TestChangePassword:
             'current_password': 'testpass123!',
             'new_password': 'newpass456!',
             'confirm_password': 'different789!',
+        })
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+
+@pytest.mark.django_db
+class TestPasswordReset:
+    request_url = '/api/v1/auth/password-reset/'
+    confirm_url = '/api/v1/auth/password-reset/confirm/'
+
+    @pytest.fixture(autouse=True)
+    def clear_throttle_cache(self):
+        from django.core.cache import cache
+        cache.clear()
+        yield
+        cache.clear()
+
+    def _make_reset_link(self, user):
+        uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+        token = default_token_generator.make_token(user)
+        return uid, token
+
+    def test_request_reset_existing_email_returns_200(self, api_client, admin_user):
+        """Valid email → 200 with generic message (no email enumeration)."""
+        resp = api_client.post(self.request_url, {'email': admin_user.email})
+        assert resp.status_code == status.HTTP_200_OK
+        assert 'message' in resp.data
+
+    def test_request_reset_unknown_email_still_returns_200(self, api_client):
+        """Unknown email → still 200, prevents email enumeration."""
+        resp = api_client.post(self.request_url, {'email': 'nobody@nowhere.com'})
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_request_reset_empty_email_returns_200(self, api_client):
+        """Empty email → 200 generic response, no crash."""
+        resp = api_client.post(self.request_url, {'email': ''})
+        assert resp.status_code == status.HTTP_200_OK
+
+    def test_confirm_reset_valid_token_changes_password(self, api_client, admin_user):
+        """Valid uid + token + new password → 200, password is updated."""
+        uid, token = self._make_reset_link(admin_user)
+        resp = api_client.post(self.confirm_url, {
+            'uid': uid,
+            'token': token,
+            'new_password': 'NewSecurePass99!',
+        })
+        assert resp.status_code == status.HTTP_200_OK
+        admin_user.refresh_from_db()
+        assert admin_user.check_password('NewSecurePass99!')
+
+    def test_confirm_reset_invalid_token_returns_400(self, api_client, admin_user):
+        """Invalid token → 400."""
+        uid = urlsafe_base64_encode(force_bytes(str(admin_user.pk)))
+        resp = api_client.post(self.confirm_url, {
+            'uid': uid,
+            'token': 'completely-wrong-token',
+            'new_password': 'NewSecurePass99!',
+        })
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_confirm_reset_invalid_uid_returns_400(self, api_client):
+        """Garbage uid → 400, no crash."""
+        resp = api_client.post(self.confirm_url, {
+            'uid': 'notavaliduid',
+            'token': 'sometoken',
+            'new_password': 'NewSecurePass99!',
+        })
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_confirm_reset_short_password_returns_400(self, api_client, admin_user):
+        """Password < 8 chars → 400."""
+        uid, token = self._make_reset_link(admin_user)
+        resp = api_client.post(self.confirm_url, {
+            'uid': uid,
+            'token': token,
+            'new_password': 'short',
+        })
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_confirm_reset_missing_fields_returns_400(self, api_client):
+        """Missing fields → 400."""
+        resp = api_client.post(self.confirm_url, {})
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_token_invalidated_after_password_change(self, api_client, admin_user):
+        """Token cannot be reused after password is reset."""
+        uid, token = self._make_reset_link(admin_user)
+        # First reset succeeds
+        api_client.post(self.confirm_url, {
+            'uid': uid, 'token': token, 'new_password': 'FirstNewPass99!',
+        })
+        # Second attempt with same token → 400
+        resp = api_client.post(self.confirm_url, {
+            'uid': uid, 'token': token, 'new_password': 'SecondAttempt99!',
         })
         assert resp.status_code == status.HTTP_400_BAD_REQUEST

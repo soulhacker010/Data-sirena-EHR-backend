@@ -13,6 +13,7 @@ from .views import (
     OrganizationSettingsView, UserViewSet, NPIViewSet,
     LocationListView, ProviderListView,
     NotificationPreferenceView,
+    PasswordResetRequestView, PasswordResetConfirmView,
 )
 
 router = DefaultRouter()
@@ -26,6 +27,8 @@ urlpatterns = [
     path('token/refresh/', TokenRefreshView.as_view(), name='token-refresh'),
     path('me/', MeView.as_view(), name='me'),
     path('password/', ChangePasswordView.as_view(), name='change-password'),
+    path('password-reset/', PasswordResetRequestView.as_view(), name='password-reset-request'),
+    path('password-reset/confirm/', PasswordResetConfirmView.as_view(), name='password-reset-confirm'),
     path('organization/', OrganizationSettingsView.as_view(), name='organization-settings'),
 
     # Lookup endpoints (any authenticated user)

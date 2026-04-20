@@ -23,8 +23,10 @@ def submit_claim_to_clearinghouse(claim_id):
 
     try:
         claim = Claim.objects.get(id=claim_id)
-        # TODO: Integrate with actual clearinghouse API
-        # For now, just mark as submitted
+        # PENDING: Office Ally clearinghouse API integration.
+        # Waiting on Office Ally to provide API credentials/docs.
+        # Once received, replace this stub with actual EDI 837 submission.
+        # For now, just mark as submitted locally.
         claim.status = 'submitted'
         claim.submitted_at = timezone.now()
         claim.save(update_fields=['status', 'submitted_at', 'updated_at'])

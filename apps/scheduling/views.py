@@ -8,6 +8,8 @@ PUT    /api/v1/appointments/{id}/         → update
 DELETE /api/v1/appointments/{id}/         → cancel
 POST   /api/v1/appointments/{id}/status/  → update status only
 """
+import logging
+
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -25,6 +27,8 @@ from .serializers import (
     AppointmentStatusSerializer,
 )
 from .services import RecurrenceGenerator
+
+logger = logging.getLogger(__name__)
 
 
 class AppointmentViewSet(viewsets.ModelViewSet):
@@ -107,7 +111,7 @@ class AppointmentViewSet(viewsets.ModelViewSet):
             org_name = self.request.user.organization.name if self.request.user.organization else 'Sirena Health'
             EmailService.send_appointment_email(appointment, event=event, org_name=org_name)
         except Exception:
-            pass
+            logger.exception('Failed to send %s email for appointment %s', event, appointment.pk)
 
     def perform_create(self, serializer):
         """

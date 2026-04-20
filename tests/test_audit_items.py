@@ -486,24 +486,13 @@ class TestDashboardStatsScoping:
         assert resp.status_code == status.HTTP_200_OK
         assert resp.data['total_clients'] == 2
 
-    def test_clinician_sees_only_own_clients(self, clinician_client, clinician_user, org):
-        """Clinician sees only clients they have appointments with."""
-        from apps.scheduling.models import Appointment
-        c1 = Client.objects.create(organization=org, first_name='My', last_name='Client', date_of_birth='2020-01-01')
+    def test_clinician_sees_all_org_clients(self, clinician_client, clinician_user, org):
+        """Clinician sees all active org clients (not just their own) — matches P0-2 fix."""
+        Client.objects.create(organization=org, first_name='My', last_name='Client', date_of_birth='2020-01-01')
         Client.objects.create(organization=org, first_name='Not', last_name='Mine', date_of_birth='2020-01-01')
-        Appointment.objects.create(
-            organization=org,
-            client=c1,
-            provider=clinician_user,
-            start_time='2026-03-01T09:00:00Z',
-            end_time='2026-03-01T10:00:00Z',
-            service_code='97153',
-            units=4,
-            status='scheduled',
-        )
         resp = clinician_client.get(self.url)
         assert resp.status_code == status.HTTP_200_OK
-        assert resp.data['total_clients'] == 1
+        assert resp.data['total_clients'] == 2
 
     def test_clinician_sees_own_upcoming(self, clinician_client, clinician_user, admin_user, org):
         """Clinician only sees their own upcoming appointments."""

@@ -38,6 +38,97 @@ class TestNoteCreate:
         resp = api_client.post(self.url, {}, format='json')
         assert resp.status_code == status.HTTP_401_UNAUTHORIZED
 
+    def test_supervisor_can_create_note(self, org, sample_client):
+        """Supervisors must be able to create notes (was failing for some users in prod)."""
+        from rest_framework.test import APIClient
+        from apps.accounts.models import User
+        supervisor = User.objects.create_user(
+            email='sup@test.com', password='pass',
+            first_name='Sup', last_name='Visor',
+            role='supervisor', organization=org,
+        )
+        client = APIClient()
+        client.force_authenticate(user=supervisor)
+        resp = client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'note_data': {'objectives': 'Supervision note'},
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_admin_can_create_note(self, org, sample_client):
+        """Admins must be able to create notes."""
+        from rest_framework.test import APIClient
+        from apps.accounts.models import User
+        admin = User.objects.create_user(
+            email='admin2@test.com', password='pass',
+            first_name='Admin', last_name='Two',
+            role='admin', organization=org,
+        )
+        client = APIClient()
+        client.force_authenticate(user=admin)
+        resp = client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'note_data': {'objectives': 'Admin note'},
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+
+    def test_front_desk_cannot_create_note(self, org, sample_client):
+        """Front desk role must NOT create clinical notes — returns 403."""
+        from rest_framework.test import APIClient
+        from apps.accounts.models import User
+        fd_user = User.objects.create_user(
+            email='frontdesk@test.com', password='pass',
+            first_name='Front', last_name='Desk',
+            role='front_desk', organization=org,
+        )
+        client = APIClient()
+        client.force_authenticate(user=fd_user)
+        resp = client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'note_data': {'objectives': 'Unauthorized note'},
+        }, format='json')
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_biller_cannot_create_note(self, org, sample_client):
+        """Biller role must NOT create clinical notes — returns 403."""
+        from rest_framework.test import APIClient
+        from apps.accounts.models import User
+        biller = User.objects.create_user(
+            email='biller@test.com', password='pass',
+            first_name='Bill', last_name='Er',
+            role='biller', organization=org,
+        )
+        client = APIClient()
+        client.force_authenticate(user=biller)
+        resp = client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'note_data': {'objectives': 'Unauthorized note'},
+        }, format='json')
+        assert resp.status_code == status.HTTP_403_FORBIDDEN
+
+    def test_provider_auto_set_to_current_user(self, clinician_client, clinician_user, sample_client):
+        """Provider on a new note is always the logged-in user, regardless of payload."""
+        resp = clinician_client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'note_data': {},
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert resp.data['provider_id'] == str(clinician_user.id)
+
+    def test_cross_org_client_rejected(self, clinician_client, other_org):
+        """Client from a different org → 400, not 403."""
+        from apps.clients.models import Client
+        other_client = Client.objects.create(
+            organization=other_org,
+            first_name='Other', last_name='Client',
+            date_of_birth='1990-01-01',
+        )
+        resp = clinician_client.post(self.url, {
+            'client_id': str(other_client.id),
+            'note_data': {'objectives': 'Cross-org attempt'},
+        }, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
 
 @pytest.mark.django_db
 class TestNoteList:

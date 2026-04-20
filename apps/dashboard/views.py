@@ -22,9 +22,12 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        org = request.organization
+        org = request.user.organization
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+        if org is None:
+            return Response({'error': 'User has no organization assigned.'}, status=400)
 
         # Import models here to avoid circular imports
         from apps.clients.models import Client
@@ -36,15 +39,7 @@ class DashboardStatsView(APIView):
         # Clinicians see only their own data; others see org-wide
         is_clinician = request.user.role == 'clinician'
 
-        # Core stats
-        if is_clinician:
-            # Count distinct clients the clinician has appointments with
-            total_clients = Client.objects.filter(
-                organization=org, is_active=True,
-                appointments__provider=request.user,
-            ).distinct().count()
-        else:
-            total_clients = Client.objects.filter(organization=org, is_active=True).count()
+        total_clients = Client.objects.filter(organization=org, is_active=True).count()
 
         sessions_qs = Appointment.objects.filter(
             organization=org,
@@ -54,20 +49,31 @@ class DashboardStatsView(APIView):
         if is_clinician:
             sessions_qs = sessions_qs.filter(provider=request.user)
         sessions_this_month = sessions_qs.count()
+
+        # Pending notes = attended appointments with no signed note + draft/unsigned notes + pending co-signs
+        attended_no_note_qs = Appointment.objects.filter(
+            organization=org,
+            status='attended',
+        ).exclude(
+            session_note__status='signed'
+        )
         if is_clinician:
-            pending_notes = SessionNote.objects.filter(
-                client__organization=org,
-            ).filter(
-                Q(provider=request.user, status__in=['draft', 'completed'])
-                | Q(status='signed', note_data__co_sign_request__recipient_id=str(request.user.id))
-            ).count()
-        else:
-            pending_notes = SessionNote.objects.filter(
-                client__organization=org,
-            ).filter(
-                Q(status__in=['draft', 'completed'])
-                | Q(status='signed', note_data__co_sign_request__recipient_id=str(request.user.id))
-            ).count()
+            attended_no_note_qs = attended_no_note_qs.filter(provider=request.user)
+
+        unsigned_notes_qs = SessionNote.objects.filter(
+            client__organization=org,
+            status__in=['draft', 'completed'],
+        )
+        if is_clinician:
+            unsigned_notes_qs = unsigned_notes_qs.filter(provider=request.user)
+
+        cosign_pending = SessionNote.objects.filter(
+            client__organization=org,
+            status='signed',
+            note_data__co_sign_request__recipient_id=str(request.user.id),
+        ).count()
+
+        pending_notes = attended_no_note_qs.count() + unsigned_notes_qs.count() + cosign_pending
 
         # Revenue MTD
         revenue_mtd = Payment.objects.filter(

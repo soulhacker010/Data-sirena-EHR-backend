@@ -186,12 +186,6 @@ CORS_ALLOWED_ORIGINS = os.getenv(
 
 CORS_ALLOW_CREDENTIALS = True
 
-# ─── Stripe ─────────────────────────────────────────────────────────────────────
-
-STRIPE_SECRET_KEY = os.getenv('STRIPE_SECRET_KEY', '')
-STRIPE_WEBHOOK_SECRET = os.getenv('STRIPE_WEBHOOK_SECRET', '')
-STRIPE_FEE_PASSTHROUGH = os.getenv('STRIPE_FEE_PASSTHROUGH', 'false').lower() == 'true'
-
 # ─── Resend Email ───────────────────────────────────────────────────────────────
 
 RESEND_API_KEY = os.getenv('RESEND_API_KEY', '')

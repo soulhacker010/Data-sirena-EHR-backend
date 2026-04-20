@@ -23,70 +23,50 @@ from django.utils import timezone
 
 logger = logging.getLogger(__name__)
 
-# ─── Frontend Design Tokens ─────────────────────────────────────────────
-# Must stay in sync with sirena-frontend/src/index.css @theme variables
-PRIMARY = '#0D9488'
-PRIMARY_DARK = '#0F766E'
-PRIMARY_LIGHT = '#14B8A6'
-CYAN = '#0891B2'
-BG = '#F8FAFC'
-CARD = '#FFFFFF'
-SURFACE = '#F1F5F9'
-SURFACE_TINT = '#ECFEFF'
-SURFACE_WARM = '#FFFBEB'
-BORDER = '#E2E8F0'
-TEXT = '#0F172A'
+# ─── Design Tokens (synced with sirena-frontend/src/index.css) ──────────────
+PRIMARY        = '#0D9488'
+PRIMARY_DARK   = '#0F766E'
+PRIMARY_LIGHT  = '#14B8A6'
+CYAN           = '#06B6D4'
+BG             = '#F1F5F9'
+CARD           = '#FFFFFF'
+SURFACE        = '#F8FAFC'
+SURFACE_TINT   = '#F0FDFA'
+SURFACE_WARM   = '#FFFBEB'
+BORDER         = '#E2E8F0'
+TEXT           = '#0F172A'
 TEXT_SECONDARY = '#475569'
-TEXT_MUTED = '#94A3B8'
-SUCCESS = '#10B981'
-WARNING = '#F59E0B'
-ERROR = '#EF4444'
-INFO = '#3B82F6'
-FONT_STACK = "'Nexa', system-ui, -apple-system, sans-serif"
+TEXT_MUTED     = '#94A3B8'
+SUCCESS        = '#10B981'
+SUCCESS_BG     = '#ECFDF5'
+WARNING        = '#F59E0B'
+WARNING_BG     = '#FFFBEB'
+ERROR          = '#EF4444'
+INFO           = '#3B82F6'
 
-# Email validation pattern
 EMAIL_RE = re.compile(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$')
 
 
 def _validate_email(email: str) -> bool:
-    """Basic email format validation."""
     return bool(EMAIL_RE.match(email))
 
 
 def _esc(value) -> str:
-    """
-    Escape a value for safe HTML rendering in email templates.
-
-    FIX #1: Prevents XSS / HTML injection via user-provided data
-    (client names, service codes, descriptions, org names).
-    """
+    """Escape value for safe HTML rendering — prevents XSS via user data."""
     if value is None:
         return ''
     return html_mod.escape(str(value))
 
 
 def _format_from(org_name: str = 'Sirena Health') -> str:
-    """
-    Format the 'from' field for Resend.
-
-    Resend requires 'Display Name <email@domain.com>' format.
-    FIX #6: Strip < > from org name so it doesn't corrupt the from header.
-    """
     raw_email = settings.DEFAULT_FROM_EMAIL
-    # If already has display name format, return as-is
     if '<' in raw_email:
         return raw_email
-    # Strip chars that break RFC 5322 display name
     safe_name = re.sub(r'[<>"\\\r\n]', '', org_name).strip() or 'Sirena Health'
     return f'{safe_name} <{raw_email}>'
 
 
 def _money(value) -> str:
-    """
-    Safely format a decimal value as currency string.
-
-    FIX #11: Guards against None values that would crash :.2f formatting.
-    """
     try:
         return f'{float(value or 0):.2f}'
     except (TypeError, ValueError):
@@ -95,14 +75,14 @@ def _money(value) -> str:
 
 def _datetime_label(value) -> str:
     if not value:
-        return '-'
+        return '\u2014'
     dt = timezone.localtime(value) if timezone.is_aware(value) else value
     return dt.strftime('%B %d, %Y at %I:%M %p').replace(' 0', ' ')
 
 
 def _date_label(value) -> str:
     if not value:
-        return '-'
+        return '\u2014'
     return value.strftime('%B %d, %Y')
 
 
@@ -111,120 +91,184 @@ def _initials(value: str) -> str:
     return ''.join(parts[:2]) or 'SH'
 
 
-def _section_card(content: str, *, accent: str = BORDER, background: str = CARD) -> str:
-    return f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 22px;background:{background};border:1px solid {BORDER};border-top:3px solid {accent};border-radius:18px;box-shadow:0 10px 24px rgba(15,23,42,0.04)">
-        <tr>
-            <td style="padding:22px 24px">{content}</td>
-        </tr>
-    </table>'''
+# ─── Component Primitives ────────────────────────────────────────────────────
+
+def _label(text: str) -> str:
+    return (
+        '<p style="margin:0 0 4px;color:' + TEXT_MUTED + ';font-size:10px;'
+        'font-weight:700;text-transform:uppercase;letter-spacing:0.14em">'
+        + _esc(text) + '</p>'
+    )
 
 
-def _info_row(label: str, value: str, *, emphasized: bool = False) -> str:
-    value_color = TEXT if emphasized else TEXT_SECONDARY
-    value_weight = '700' if emphasized else '600'
-    return f'''<tr>
-        <td style="padding:0 0 14px;color:{TEXT_MUTED};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">{_esc(label)}</td>
-        <td style="padding:0 0 14px;text-align:right;color:{value_color};font-size:14px;font-weight:{value_weight}">{value}</td>
-    </tr>'''
+def _info_row(label: str, value: str, *, emphasized: bool = False, last: bool = False) -> str:
+    border = '' if last else 'border-bottom:1px solid ' + BORDER + ';'
+    v_color = TEXT if emphasized else TEXT_SECONDARY
+    v_weight = '700' if emphasized else '500'
+    return (
+        '<tr>'
+        '<td style="padding:10px 0;' + border + 'color:' + TEXT_MUTED + ';font-size:11px;'
+        'font-weight:700;text-transform:uppercase;letter-spacing:0.1em;width:40%">'
+        + _esc(label) + '</td>'
+        '<td style="padding:10px 0;' + border + 'text-align:right;color:' + v_color + ';'
+        'font-size:13px;font-weight:' + v_weight + '">' + value + '</td>'
+        '</tr>'
+    )
+
+
+def _section_card(content: str, *, accent: str = PRIMARY, background: str = CARD, title: str = '') -> str:
+    title_row = ''
+    if title:
+        title_row = (
+            '<p style="margin:0 0 14px;color:' + accent + ';font-size:10px;font-weight:700;'
+            'text-transform:uppercase;letter-spacing:0.14em">' + _esc(title) + '</p>'
+        )
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="margin:0 0 20px;background:' + background + ';border:1px solid ' + BORDER + ';'
+        'border-left:3px solid ' + accent + ';border-radius:8px">'
+        '<tr><td style="padding:18px 20px">' + title_row + content + '</td></tr>'
+        '</table>'
+    )
+
+
+def _highlight_card(label: str, value: str, *, accent: str = PRIMARY, background: str = SURFACE_TINT) -> str:
+    return (
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+        'style="margin:0 0 20px;background:' + background + ';border:1px solid ' + BORDER + ';border-radius:8px">'
+        '<tr><td style="padding:20px 24px;text-align:center">'
+        '<p style="margin:0 0 4px;color:' + TEXT_MUTED + ';font-size:10px;font-weight:700;'
+        'text-transform:uppercase;letter-spacing:0.14em">' + _esc(label) + '</p>'
+        '<p style="margin:0;color:' + accent + ';font-size:36px;font-weight:700;'
+        'letter-spacing:-0.02em;line-height:1.1">' + value + '</p>'
+        '</td></tr></table>'
+    )
 
 
 def _cta_button(label: str, url: str) -> str:
-    return f'''<table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 0">
-        <tr>
-            <td align="center" style="border-radius:12px;background:{PRIMARY_DARK}">
-                <a href="{_esc(url)}" style="display:inline-block;padding:14px 22px;border-radius:12px;background:{PRIMARY_DARK};color:{CARD};font-size:14px;font-weight:700;letter-spacing:0.01em;text-decoration:none">{_esc(label)}</a>
-            </td>
-        </tr>
-    </table>'''
+    return (
+        '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:28px auto 0">'
+        '<tr><td align="center" style="border-radius:8px;background:' + PRIMARY + '">'
+        '<a href="' + _esc(url) + '" style="display:inline-block;padding:14px 32px;border-radius:8px;'
+        'background:' + PRIMARY + ';color:#FFFFFF;font-size:14px;font-weight:700;'
+        'letter-spacing:0.02em;text-decoration:none;font-family:Arial,Helvetica,sans-serif">'
+        + _esc(label) + '</a></td></tr></table>'
+    )
 
 
-def _base_template(header_text: str, body_html: str, org_name: str = 'Sirena Health') -> str:
+# ─── Base Template ───────────────────────────────────────────────────────────
+
+def _base_template(
+    header_text: str,
+    body_html: str,
+    org_name: str = 'Sirena Health',
+) -> str:
     """
-    Base email template matching the Sirena Health frontend design.
-
-    Uses the same teal primary (#0D9488), border (#E2E8F0), background (#F8FAFC),
-    and text colors (#0F172A, #475569) as the frontend CSS.
+    Premium email template — gradient header banner, white body card, clean footer.
+    Table-based layout for universal email client support.
     """
-    safe_org = _esc(org_name)
+    safe_org    = _esc(org_name)
     safe_header = _esc(header_text)
     frontend_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/') or ''
     logo_url = f'{frontend_url}/images/EHRlogo.png' if frontend_url else ''
+    current_year = timezone.now().year
 
-    # Logo image tag for the header (falls back to text initials if no URL)
     if logo_url:
-        logo_cell = f'<td style="width:52px;height:52px;text-align:center;vertical-align:middle"><img src="{logo_url}" alt="{safe_org}" width="52" height="52" style="display:block;width:52px;height:52px;object-fit:contain;border:0" /></td>'
-        top_badge = f'<img src="{logo_url}" alt="Sirena Health EHR" width="160" height="40" style="display:inline-block;width:160px;height:40px;object-fit:contain;border:0" />'
+        logo_html = (
+            '<img src="' + logo_url + '" alt="' + safe_org + '" width="44" height="44" '
+            'style="display:block;width:44px;height:44px;object-fit:contain;border:0;'
+            'border-radius:8px;background:#fff;padding:4px" />'
+        )
     else:
         org_initials = _initials(org_name)
-        logo_cell = f'<td style="width:52px;height:52px;border-radius:16px;background:{SURFACE_TINT};border:1px solid rgba(13,148,136,0.18);text-align:center;color:{PRIMARY_DARK};font-size:20px;font-weight:700">{org_initials}</td>'
-        top_badge = f'<span style="display:inline-block;padding:7px 12px;border-radius:999px;background:{CARD};border:1px solid rgba(13,148,136,0.12);color:{PRIMARY_DARK};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Sirena Health EHR</span>'
+        logo_html = (
+            '<div style="width:44px;height:44px;border-radius:8px;background:rgba(255,255,255,0.2);'
+            'color:#fff;font-size:18px;font-weight:700;line-height:44px;text-align:center">'
+            + org_initials + '</div>'
+        )
 
-    return f'''<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{safe_header}</title>
-</head>
-<body style="margin:0;padding:0;background-color:{BG};font-family:{FONT_STACK};-webkit-font-smoothing:antialiased;color:{TEXT}">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{BG}">
-        <tr>
-            <td align="center" style="padding:40px 16px 28px">
-                <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="max-width:620px;width:100%">
-                    <tr>
-                        <td style="padding:0 0 20px;text-align:center">
-                            {top_badge}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="background:{CARD};padding:28px 30px;border:1px solid {BORDER};border-top:4px solid {PRIMARY};border-radius:28px 28px 0 0">
-                            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                                <tr>
-                                    <td style="vertical-align:top">
-                                        <table role="presentation" cellpadding="0" cellspacing="0">
-                                            <tr>
-                                                {logo_cell}
-                                                <td style="width:16px"></td>
-                                                <td>
-                                                    <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase">Care coordination</p>
-                                                    <h1 style="margin:0;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">{safe_org}</h1>
-                                                    <p style="margin:8px 0 0;color:{TEXT_SECONDARY};font-size:15px;font-weight:600">{safe_header}</p>
-                                                </td>
-                                            </tr>
-                                        </table>
-                                    </td>
-                                </tr>
-                            </table>
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="background:{CARD};padding:36px 34px;border:1px solid {BORDER};border-top:none;border-radius:0 0 28px 28px;box-shadow:0 18px 40px rgba(15,23,42,0.08)">
-                            {body_html}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td style="padding:18px 18px 0;text-align:center">
-                            <p style="margin:0;color:{TEXT_MUTED};font-size:12px;font-weight:600;line-height:1.6">
-                                This message was sent by {safe_org}. If you need help, contact your organization administrator.
-                            </p>
-                        </td>
-                    </tr>
-                </table>
-            </td>
-        </tr>
-    </table>
-</body>
-</html>'''
+    return (
+        '<!DOCTYPE html>\n'
+        '<html lang="en" xmlns="http://www.w3.org/1999/xhtml">\n'
+        '<head>\n'
+        '    <meta charset="utf-8">\n'
+        '    <meta name="viewport" content="width=device-width,initial-scale=1.0">\n'
+        '    <meta name="x-apple-disable-message-reformatting">\n'
+        '    <title>' + safe_header + '</title>\n'
+        '    <style>\n'
+        '        body{margin:0;padding:0;background-color:' + BG + ';-webkit-text-size-adjust:100%}\n'
+        '        table{border-collapse:collapse;mso-table-lspace:0;mso-table-rspace:0}\n'
+        '        img{border:0;outline:none;text-decoration:none}\n'
+        '        a{color:' + PRIMARY + '}\n'
+        '        @media only screen and (max-width:640px){\n'
+        '            .ew{width:100% !important}\n'
+        '            .eb{padding:24px 18px !important}\n'
+        '            .eh{padding:22px 20px !important}\n'
+        '        }\n'
+        '    </style>\n'
+        '</head>\n'
+        '<body style="margin:0;padding:0;background-color:' + BG + ';font-family:Arial,Helvetica,sans-serif">\n\n'
 
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + BG + '">\n'
+        '<tr><td align="center" style="padding:32px 16px 40px">\n\n'
+
+        '    <table role="presentation" class="ew" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%">\n\n'
+
+        # Gradient header banner
+        '        <tr>\n'
+        '            <td style="border-radius:12px 12px 0 0;background:' + PRIMARY + ';background:linear-gradient(135deg,' + PRIMARY + ' 0%,' + CYAN + ' 100%);padding:0">\n'
+        '                <table role="presentation" width="100%" cellpadding="0" cellspacing="0">\n'
+        '                <tr><td class="eh" style="padding:28px 32px">\n'
+        '                    <table role="presentation" cellpadding="0" cellspacing="0">\n'
+        '                    <tr>\n'
+        '                        <td style="vertical-align:middle;padding-right:16px">' + logo_html + '</td>\n'
+        '                        <td style="vertical-align:middle">\n'
+        '                            <p style="margin:0 0 1px;color:rgba(255,255,255,0.75);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.16em">' + safe_org + '</p>\n'
+        '                            <p style="margin:0;color:#FFFFFF;font-size:22px;font-weight:700;letter-spacing:-0.01em;line-height:1.2">' + safe_header + '</p>\n'
+        '                        </td>\n'
+        '                    </tr>\n'
+        '                    </table>\n'
+        '                </td></tr>\n'
+        '                </table>\n'
+        '            </td>\n'
+        '        </tr>\n\n'
+
+        # White body card
+        '        <tr>\n'
+        '            <td class="eb" style="background:' + CARD + ';padding:36px 40px;border:1px solid ' + BORDER + ';border-top:none;border-radius:0 0 12px 12px;box-shadow:0 4px 24px rgba(15,23,42,0.07)">\n'
+        + body_html +
+        '            </td>\n'
+        '        </tr>\n\n'
+
+        # Footer
+        '        <tr>\n'
+        '            <td style="padding:24px 8px 8px;text-align:center">\n'
+        '                <p style="margin:0 0 6px;color:' + TEXT_MUTED + ';font-size:11px;line-height:1.6">'
+        'Sent by <strong style="color:' + TEXT_SECONDARY + '">' + safe_org + '</strong> via Sirena Health EHR.</p>\n'
+        '                <p style="margin:0;color:' + TEXT_MUTED + ';font-size:11px;line-height:1.6">'
+        'This message is intended only for the named recipient. If you received it in error, please disregard it.</p>\n'
+        '                <p style="margin:8px 0 0;color:' + BORDER + ';font-size:11px">'
+        '&copy; ' + str(current_year) + ' Sirena Health</p>\n'
+        '            </td>\n'
+        '        </tr>\n\n'
+
+        '    </table>\n'
+        '</td></tr>\n'
+        '</table>\n\n'
+        '</body>\n'
+        '</html>'
+    )
+
+
+# ─── Email Service ───────────────────────────────────────────────────────────
 
 class EmailService:
     """Centralized email service wrapping the Resend SDK."""
 
     @classmethod
     def _get_configured(cls) -> bool:
-        """Initialize Resend with API key. Returns True if configured."""
         if not getattr(settings, 'RESEND_API_KEY', ''):
-            logger.warning('RESEND_API_KEY not set - email will be logged only')
+            logger.warning('RESEND_API_KEY not set — email will be logged only')
             return False
         resend.api_key = settings.RESEND_API_KEY
         return True
@@ -241,41 +285,24 @@ class EmailService:
         """
         Send a generic email via Resend.
 
-        Args:
-            to: List of recipient email addresses
-            subject: Email subject line
-            html: HTML body content
-            from_email: Optional full sender override (e.g. 'Name <email>')
-            org_name: Organization name for 'from' display name
-
-        Raises:
-            ValueError: If any recipient email address is invalid
+        Raises ValueError if any recipient address is invalid.
         """
-        # Validate all recipient emails
         invalid = [e for e in to if not _validate_email(e)]
         if invalid:
             raise ValueError(f'Invalid email address(es): {", ".join(invalid)}')
 
         if not cls._get_configured():
-            # FIX #9: Don't log sensitive content (passwords etc.) in dev mode
             logger.info(f'[DEV MODE] Would send to {to}: {subject}')
             return None
 
         sender = from_email or _format_from(org_name)
-
-        payload = {
-            'from': sender,
-            'to': to,
-            'subject': subject,
-            'html': html,
-        }
+        payload = {'from': sender, 'to': to, 'subject': subject, 'html': html}
         reply_to = getattr(settings, 'RESEND_REPLY_TO', '')
         if reply_to:
             payload['reply_to'] = reply_to
 
         try:
             response = resend.Emails.send(payload)
-            # Resend v2 returns a SendResponse object with .id attribute
             email_id = getattr(response, 'id', None) or str(response)
             logger.info(f'Email sent to {to}: {subject} (id={email_id})')
             return response
@@ -283,303 +310,348 @@ class EmailService:
             logger.error(f'Failed to send email to {to}: {e}', exc_info=True)
             raise
 
-    # ─── Invoice Email ───────────────────────────────────────────────────
+    # ─── Invoice Email ───────────────────────────────────────────────────────
 
     @classmethod
     def send_invoice_email(cls, invoice, to_email: str, org_name: str = 'Sirena Health'):
-        """
-        Send an invoice email to a client.
-
-        Args:
-            invoice: Invoice model instance (queryset should have prefetched items)
-            to_email: Recipient email
-            org_name: Organization name for branding
-        """
         items = invoice.items.all()
 
-        # FIX #10: Handle empty items table gracefully
         if items.exists():
             items_rows = ''.join(
-                f'''<tr>
-                    <td style="padding:10px 12px;border-bottom:1px solid {BORDER};color:{TEXT};font-size:13px">{_esc(item.service_code)}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid {BORDER};color:{TEXT_SECONDARY};font-size:13px">{_esc(item.description) or '-'}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid {BORDER};text-align:center;color:{TEXT};font-size:13px">{_esc(item.units)}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid {BORDER};text-align:right;color:{TEXT};font-size:13px">${_money(item.rate)}</td>
-                    <td style="padding:10px 12px;border-bottom:1px solid {BORDER};text-align:right;color:{TEXT};font-size:13px;font-weight:600">${_money(item.amount)}</td>
-                </tr>'''
+                '<tr>'
+                '<td style="padding:10px 12px;border-bottom:1px solid ' + BORDER + ';color:' + TEXT + ';font-size:13px;font-weight:600">' + _esc(item.service_code) + '</td>'
+                '<td style="padding:10px 12px;border-bottom:1px solid ' + BORDER + ';color:' + TEXT_SECONDARY + ';font-size:13px">' + (_esc(item.description) or '\u2014') + '</td>'
+                '<td style="padding:10px 12px;border-bottom:1px solid ' + BORDER + ';text-align:center;color:' + TEXT + ';font-size:13px">' + _esc(item.units) + '</td>'
+                '<td style="padding:10px 12px;border-bottom:1px solid ' + BORDER + ';text-align:right;color:' + TEXT + ';font-size:13px">$' + _money(item.rate) + '</td>'
+                '<td style="padding:10px 12px;border-bottom:1px solid ' + BORDER + ';text-align:right;color:' + TEXT + ';font-size:13px;font-weight:700">$' + _money(item.amount) + '</td>'
+                '</tr>'
                 for item in items
             )
         else:
-            items_rows = f'''<tr>
-                <td colspan="5" style="padding:20px 12px;text-align:center;color:{TEXT_MUTED};font-size:13px;font-style:italic">
-                    No line items on this invoice
-                </td>
-            </tr>'''
+            items_rows = (
+                '<tr><td colspan="5" style="padding:20px 12px;text-align:center;color:' + TEXT_MUTED + ';'
+                'font-size:13px;font-style:italic">No line items on this invoice.</td></tr>'
+            )
 
         due_date_str = invoice.due_date.strftime('%B %d, %Y') if invoice.due_date else 'Upon Receipt'
-        invoice_date_str = invoice.invoice_date.strftime('%B %d, %Y') if invoice.invoice_date else '-'
-        client_name = _esc(invoice.client.full_name) if invoice.client else 'Valued Client'
-        safe_org = _esc(org_name)
-        safe_inv_num = _esc(invoice.invoice_number)
+        invoice_date = invoice.invoice_date.strftime('%B %d, %Y') if invoice.invoice_date else '\u2014'
+        client_name  = _esc(invoice.client.full_name) if invoice.client else 'Valued Client'
+        safe_org     = _esc(org_name)
+        safe_inv     = _esc(invoice.invoice_number)
 
-        invoice_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Invoice number', f'#{safe_inv_num}', emphasized=True)}
-                {_info_row('Invoice date', invoice_date_str)}
-                {_info_row('Due date', due_date_str)}
-                {_info_row('Client', client_name)}
-            </table>''',
-            accent=PRIMARY,
-            background=SURFACE,
+        detail_rows = (
+            _info_row('Invoice number', '<strong>#' + safe_inv + '</strong>', emphasized=True)
+            + _info_row('Invoice date', invoice_date)
+            + _info_row('Due date', '<strong>' + _esc(due_date_str) + '</strong>')
+            + _info_row('Client', client_name, last=True)
         )
-        totals_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Total', f'${_money(invoice.total_amount)}', emphasized=True)}
-                {_info_row('Paid', f'${_money(invoice.paid_amount)}')}
-                <tr>
-                    <td style="padding:16px 0 0;color:{PRIMARY_DARK};font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em;border-top:1px solid {BORDER}">Balance due</td>
-                    <td style="padding:16px 0 0;text-align:right;color:{PRIMARY_DARK};font-size:26px;font-weight:700;border-top:1px solid {BORDER}">${_money(invoice.balance)}</td>
-                </tr>
-            </table>''',
-            accent=CYAN,
-            background=SURFACE_TINT,
+        detail_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + detail_rows + '</table>',
+            accent=PRIMARY, title='Invoice Details',
         )
 
-        body = f'''
-            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Billing summary</p>
-            <p style="margin:0 0 8px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Invoice #{safe_inv_num}</p>
-            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, here is your invoice summary from {safe_org}. The details below are organized for quick review.</p>
-            {invoice_summary}
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 20px;border:1px solid {BORDER};border-radius:16px;overflow:hidden;background:{CARD}">
-                <tr style="background:{BG}">
-                    <th style="padding:14px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Code</th>
-                    <th style="padding:14px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Description</th>
-                    <th style="padding:14px 14px;text-align:center;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Units</th>
-                    <th style="padding:14px 14px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Rate</th>
-                    <th style="padding:14px 14px;text-align:right;font-size:11px;text-transform:uppercase;letter-spacing:0.12em;color:{TEXT_MUTED};font-weight:700;border-bottom:1px solid {BORDER}">Amount</th>
-                </tr>
-                {items_rows}
-            </table>
-            {totals_summary}
-            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you have any questions about this invoice, please reach out to your care team and they can help you review the details.</p>
-            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
-            </p>
-        '''
+        balance_rows = (
+            _info_row('Subtotal', '$' + _money(invoice.total_amount))
+            + _info_row('Paid', '$' + _money(invoice.paid_amount))
+            + _info_row(
+                'Balance Due',
+                '<strong style="color:' + PRIMARY + ';font-size:18px">$' + _money(invoice.balance) + '</strong>',
+                emphasized=True, last=True,
+            )
+        )
+        balance_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + balance_rows + '</table>',
+            accent=CYAN, background=SURFACE_TINT, title='Summary',
+        )
+
+        items_table = (
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            'style="margin:0 0 20px;border:1px solid ' + BORDER + ';border-radius:8px;overflow:hidden">'
+            '<tr style="background:' + SURFACE + '">'
+            '<th style="padding:10px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:' + TEXT_MUTED + ';font-weight:700;border-bottom:1px solid ' + BORDER + '">Code</th>'
+            '<th style="padding:10px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:' + TEXT_MUTED + ';font-weight:700;border-bottom:1px solid ' + BORDER + '">Description</th>'
+            '<th style="padding:10px 12px;text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:' + TEXT_MUTED + ';font-weight:700;border-bottom:1px solid ' + BORDER + '">Units</th>'
+            '<th style="padding:10px 12px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:' + TEXT_MUTED + ';font-weight:700;border-bottom:1px solid ' + BORDER + '">Rate</th>'
+            '<th style="padding:10px 12px;text-align:right;font-size:10px;text-transform:uppercase;letter-spacing:0.1em;color:' + TEXT_MUTED + ';font-weight:700;border-bottom:1px solid ' + BORDER + '">Amount</th>'
+            '</tr>'
+            + items_rows +
+            '</table>'
+        )
+
+        body = (
+            _label('Billing Summary')
+            + '<p style="margin:0 0 6px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">Invoice #' + safe_inv + '</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Hello ' + client_name + ', here is your invoice from <strong style="color:' + TEXT + '">' + safe_org + '</strong>. The details are below.</p>'
+            + detail_card
+            + items_table
+            + balance_card
+            + '<p style="margin:0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.7">'
+            'If you have any questions, please contact your care team and they can review the details with you.</p>'
+            '<p style="margin:18px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Thank you,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
+        )
 
         return cls.send_generic(
             to=[to_email],
-            subject=f'Invoice #{invoice.invoice_number} from {org_name}',
+            subject='Invoice #' + invoice.invoice_number + ' \u2014 ' + org_name,
             html=_base_template('Invoice', body, org_name),
             org_name=org_name,
         )
 
-    # ─── Welcome Email ───────────────────────────────────────────────────
+    # ─── Welcome Email ───────────────────────────────────────────────────────
 
     @classmethod
     def send_welcome_email(cls, user, temp_password: Optional[str] = None):
-        """
-        Send a welcome email to a newly created user.
-
-        Args:
-            user: User model instance
-            temp_password: Temporary password (if applicable)
-        """
         if not user.email:
-            logger.warning(f'User {user} has no email - skipping welcome email')
+            logger.warning(f'User {user} has no email \u2014 skipping welcome email')
             return None
 
-        org_name = user.organization.name if getattr(user, 'organization', None) else 'Sirena Health'
-        safe_org = _esc(org_name)
-        safe_first = _esc(user.first_name)
-        safe_email = _esc(user.email)
+        org_name      = user.organization.name if getattr(user, 'organization', None) else 'Sirena Health'
+        safe_org      = _esc(org_name)
+        safe_first    = _esc(user.first_name or 'there')
+        safe_email    = _esc(user.email)
         workspace_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/') or '#'
+        role_display  = user.get_role_display() if hasattr(user, 'get_role_display') else str(user.role)
+
+        account_rows = (
+            _info_row('Email / Username', '<strong>' + safe_email + '</strong>', emphasized=True)
+            + _info_row('Role', _esc(role_display), last=True)
+        )
+        account_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + account_rows + '</table>',
+            accent=PRIMARY, title='Your Account',
+        )
 
         password_section = ''
         if temp_password:
-            # FIX #9: Only show masked password in logs, full in email
             logger.info(f'Welcome email to {user.email} includes temp password (masked)')
-            password_section = _section_card(
-                f'''<p style="margin:0 0 8px;color:{WARNING};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">Temporary password</p>
-                <p style="margin:0 0 10px;padding:14px 16px;border-radius:12px;background:{CARD};border:1px solid rgba(245,158,11,0.25);font-family:Consolas,Monaco,monospace;font-size:24px;line-height:1.2;color:{TEXT};font-weight:700;letter-spacing:0.08em">{_esc(temp_password)}</p>
-                <p style="margin:0;color:{TEXT_SECONDARY};font-size:13px;line-height:1.6;font-weight:600">Use this once, then change it immediately after your first sign-in.</p>''',
-                accent=WARNING,
-                background=SURFACE_WARM,
+            pw_content = (
+                '<p style="margin:0 0 12px;color:' + WARNING + ';font-size:13px;font-weight:600">'
+                'Use this temporary password to sign in, then change it immediately.</p>'
+                '<p style="margin:0;padding:14px 18px;border-radius:6px;background:' + CARD + ';'
+                'border:1px solid rgba(245,158,11,0.3);font-family:Consolas,Monaco,Courier New,monospace;'
+                'font-size:22px;font-weight:700;color:' + TEXT + ';letter-spacing:0.08em;text-align:center">'
+                + _esc(temp_password) + '</p>'
             )
+            password_section = _section_card(pw_content, accent=WARNING, background=WARNING_BG, title='Temporary Password')
 
-        role_display = user.get_role_display() if hasattr(user, 'get_role_display') else str(user.role)
-        account_summary = _section_card(
-            f'''<p style="margin:0 0 16px;color:{TEXT};font-size:16px;font-weight:700">Account details</p>
-            <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Email', safe_email, emphasized=True)}
-                {_info_row('Role', _esc(role_display))}
-            </table>''',
-            accent=PRIMARY,
-            background=SURFACE,
+        body = (
+            '<p style="margin:0 0 8px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">'
+            'Welcome, ' + safe_first + '.</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Your account at <strong style="color:' + TEXT + '">' + safe_org + '</strong> is ready. Below is everything you need to get started.</p>'
+            + account_card
+            + password_section
+            + _cta_button('Open Workspace', workspace_url)
+            + '<p style="margin:24px 0 0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.7">'
+            'If you need help signing in or your temporary password has expired, contact your administrator.</p>'
+            '<p style="margin:16px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Best regards,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
         )
-
-        body = f'''
-            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Welcome, {safe_first}.</p>
-            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Your account for <span style="color:{PRIMARY_DARK};font-weight:700">{safe_org}</span> is ready. Below is everything you need to sign in and get started.</p>
-            {account_summary}
-            {password_section}
-            {_cta_button('Open Workspace', workspace_url)}
-            <p style="margin:22px 0 0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you need access help or your temporary password has expired, please contact your administrator.</p>
-            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Best regards,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
-            </p>
-        '''
 
         return cls.send_generic(
             to=[user.email],
-            subject=f'Welcome to {org_name} - Your Account is Ready',
+            subject='Welcome to ' + org_name + ' \u2014 Your account is ready',
             html=_base_template('Welcome', body, org_name),
             org_name=org_name,
         )
 
-    # ─── Payment Reminder ────────────────────────────────────────────────
+    # ─── Payment Reminder ────────────────────────────────────────────────────
 
     @classmethod
     def send_payment_reminder(cls, invoice, org_name: str = 'Sirena Health'):
-        """
-        Send a payment reminder for an overdue invoice.
-
-        Args:
-            invoice: Invoice model instance with client relation
-            org_name: Organization name for branding
-        """
         if not invoice.client or not invoice.client.email:
-            logger.warning(f'Invoice {invoice} — client has no email, skipping reminder')
+            logger.warning(f'Invoice {invoice} \u2014 client has no email, skipping reminder')
             return None
 
-        client_name = _esc(invoice.client.full_name)
-        safe_org = _esc(org_name)
-        safe_inv_num = _esc(invoice.invoice_number)
+        client_name  = _esc(invoice.client.full_name)
+        safe_org     = _esc(org_name)
+        safe_inv     = _esc(invoice.invoice_number)
+        due_str      = invoice.due_date.strftime('%B %d, %Y') if invoice.due_date else 'Upon Receipt'
 
-        reminder_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Invoice', f'#{safe_inv_num}', emphasized=True)}
-                {_info_row('Total', f'${_money(invoice.total_amount)}')}
-                {_info_row('Paid', f'${_money(invoice.paid_amount)}')}
-            </table>''',
-            accent=PRIMARY,
-            background=SURFACE,
+        summary_rows = (
+            _info_row('Invoice', '<strong>#' + safe_inv + '</strong>', emphasized=True)
+            + _info_row('Due date', _esc(due_str))
+            + _info_row('Total', '$' + _money(invoice.total_amount))
+            + _info_row('Paid', '$' + _money(invoice.paid_amount), last=True)
         )
-        balance_summary = _section_card(
-            f'''<p style="margin:0 0 8px;color:{WARNING};font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.12em">Balance due</p>
-            <p style="margin:0;color:{TEXT};font-size:32px;line-height:1.1;font-weight:700">${_money(invoice.balance)}</p>
-            <p style="margin:10px 0 0;color:{TEXT_SECONDARY};font-size:13px;line-height:1.6;font-weight:600">Please review the balance and contact the clinic if you need help arranging payment.</p>''',
-            accent=WARNING,
-            background=SURFACE_WARM,
+        summary_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + summary_rows + '</table>',
+            accent=PRIMARY, title='Invoice Summary',
         )
+        balance_card = _highlight_card('Balance Due', '$' + _money(invoice.balance), accent=WARNING, background=WARNING_BG)
 
-        body = f'''
-            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Account notice</p>
-            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Payment reminder</p>
-            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, this is a friendly reminder that invoice <span style="color:{TEXT};font-weight:700">#{safe_inv_num}</span> still has an outstanding balance.</p>
-            {reminder_summary}
-            {balance_summary}
-            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you have any questions or need to arrange a payment plan, please contact {safe_org} and the team will help you.</p>
-            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span>
-            </p>
-        '''
+        body = (
+            _label('Account Notice')
+            + '<p style="margin:0 0 8px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">Payment reminder</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Hello ' + client_name + ', this is a friendly reminder that invoice '
+            '<strong style="color:' + TEXT + '">#' + safe_inv + '</strong> has an outstanding balance.</p>'
+            + summary_card
+            + balance_card
+            + '<p style="margin:0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.7">'
+            'Please contact ' + safe_org + ' if you have any questions or need to discuss payment arrangements.</p>'
+            '<p style="margin:18px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Thank you,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
+        )
 
         return cls.send_generic(
             to=[invoice.client.email],
-            subject=f'Payment Reminder - Invoice #{invoice.invoice_number}',
+            subject='Payment Reminder \u2014 Invoice #' + invoice.invoice_number,
             html=_base_template('Payment Reminder', body, org_name),
             org_name=org_name,
         )
 
+    # ─── Payment Receipt ─────────────────────────────────────────────────────
+
     @classmethod
     def send_payment_receipt(cls, payment, org_name: str = 'Sirena Health'):
         if not getattr(payment, 'client', None) or not payment.client.email:
-            logger.warning(f'Payment {payment} — client has no email, skipping receipt')
+            logger.warning(f'Payment {payment} \u2014 client has no email, skipping receipt')
             return None
 
-        invoice = payment.invoice
-        client_name = _esc(payment.client.full_name)
-        safe_org = _esc(org_name)
+        invoice      = payment.invoice
+        client_name  = _esc(payment.client.full_name)
+        safe_org     = _esc(org_name)
         safe_invoice = _esc(invoice.invoice_number if invoice else '')
         method_label = _esc(payment.payment_method or payment.payer_type or 'Recorded payment')
 
-        receipt_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Invoice', f'#{safe_invoice}', emphasized=True)}
-                {_info_row('Payment date', _datetime_label(payment.payment_date))}
-                {_info_row('Method', method_label)}
-                {_info_row('Reference', _esc(payment.reference_number) or '-')}
-            </table>''',
-            accent=PRIMARY,
-            background=SURFACE,
+        detail_rows = (
+            _info_row('Invoice', '<strong>#' + safe_invoice + '</strong>', emphasized=True)
+            + _info_row('Payment date', _datetime_label(payment.payment_date))
+            + _info_row('Method', method_label)
+            + _info_row('Reference', _esc(payment.reference_number) or '\u2014', last=True)
         )
-        balance_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Amount received', f'${_money(payment.amount)}', emphasized=True)}
-                {_info_row('Total paid', f'${_money(invoice.paid_amount if invoice else payment.amount)}')}
-                {_info_row('Remaining balance', f'${_money(invoice.balance if invoice else 0)}')}
-            </table>''',
-            accent=SUCCESS,
-            background=SURFACE_TINT,
+        detail_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + detail_rows + '</table>',
+            accent=PRIMARY, title='Payment Details',
         )
 
-        body = f'''
-            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Payment receipt</p>
-            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">Payment received</p>
-            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, we recorded your payment for invoice <span style="color:{TEXT};font-weight:700">#{safe_invoice}</span>. Your updated balance details are below.</p>
-            {receipt_summary}
-            {balance_summary}
-            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">If you believe anything looks incorrect, please contact {safe_org} so the billing team can review it with you.</p>
-            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span></p>
-        '''
+        balance_rows = (
+            _info_row(
+                'Amount received',
+                '<strong style="color:' + SUCCESS + '">$' + _money(payment.amount) + '</strong>',
+                emphasized=True,
+            )
+            + _info_row('Total paid', '$' + _money(invoice.paid_amount if invoice else payment.amount))
+            + _info_row('Remaining balance', '$' + _money(invoice.balance if invoice else 0), last=True)
+        )
+        balance_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + balance_rows + '</table>',
+            accent=SUCCESS, background=SUCCESS_BG, title='Balance Summary',
+        )
+
+        inv_num = invoice.invoice_number if invoice else ''
+        body = (
+            _label('Payment Receipt')
+            + '<p style="margin:0 0 8px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">Payment received</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Hello ' + client_name + ', we recorded your payment for invoice '
+            '<strong style="color:' + TEXT + '">#' + safe_invoice + '</strong>. Your updated balance is below.</p>'
+            + detail_card
+            + balance_card
+            + '<p style="margin:0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.7">'
+            'If anything looks incorrect, please contact ' + safe_org + ' so the billing team can review it with you.</p>'
+            '<p style="margin:18px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Thank you,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
+        )
 
         return cls.send_generic(
             to=[payment.client.email],
-            subject=f'Payment Receipt - Invoice #{invoice.invoice_number}',
-            html=_base_template('Payment Receipt', body, org_name),
+            subject='Payment Receipt \u2014 Invoice #' + inv_num,
+            html=_base_template('Payment Received', body, org_name),
             org_name=org_name,
         )
+
+    # ─── Password Reset ──────────────────────────────────────────────────────
+
+    @classmethod
+    def send_password_reset_email(cls, user, reset_url: str, org_name: str = 'Sirena Health'):
+        if not user.email:
+            return None
+
+        safe_first = _esc(user.first_name or 'there')
+        safe_org   = _esc(org_name)
+
+        security_content = (
+            '<p style="margin:0 0 6px;color:' + WARNING + ';font-size:13px;font-weight:600">'
+            'This link expires in <strong>1 hour</strong>.</p>'
+            '<p style="margin:0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.6">'
+            'If you did not request a password reset, you can safely ignore this email \u2014 your password will not change.</p>'
+        )
+        security_card = _section_card(security_content, accent=WARNING, background=WARNING_BG, title='Security Notice')
+
+        body = (
+            '<p style="margin:0 0 8px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">Reset your password</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Hi ' + safe_first + ', we received a request to reset your password for '
+            '<strong style="color:' + TEXT + '">' + safe_org + '</strong>. Click the button below to choose a new one.</p>'
+            + security_card
+            + _cta_button('Reset Password', reset_url)
+            + '<p style="margin:24px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Thank you,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
+        )
+
+        return cls.send_generic(
+            to=[user.email],
+            subject='Reset your ' + org_name + ' password',
+            html=_base_template('Password Reset', body, org_name),
+            org_name=org_name,
+        )
+
+    # ─── Appointment Email ───────────────────────────────────────────────────
 
     @classmethod
     def send_appointment_email(cls, appointment, *, event: str, org_name: str = 'Sirena Health'):
         if not getattr(appointment, 'client', None) or not appointment.client.email:
-            logger.warning(f'Appointment {appointment} — client has no email, skipping appointment email')
+            logger.warning(f'Appointment {appointment} \u2014 client has no email, skipping appointment email')
             return None
 
-        client_name = _esc(appointment.client.full_name)
+        client_name   = _esc(appointment.client.full_name)
         provider_name = _esc(getattr(appointment.provider, 'full_name', '') or 'Care team')
-        location_name = _esc(getattr(appointment.location, 'name', '') or 'Clinic location will be confirmed')
-        safe_org = _esc(org_name)
-        service_code = _esc(appointment.service_code) or 'Scheduled visit'
-        status_copy = {
-            'scheduled': ('Appointment Scheduled', 'Your appointment has been scheduled.'),
-            'updated': ('Appointment Updated', 'Your appointment details were updated.'),
-            'cancelled': ('Appointment Cancelled', 'Your appointment has been cancelled.'),
-        }
-        header_text, intro = status_copy.get(event, ('Appointment Update', 'Your appointment information has changed.'))
+        location_name = _esc(getattr(appointment.location, 'name', '') or 'To be confirmed')
+        safe_org      = _esc(org_name)
+        service_code  = _esc(appointment.service_code) or 'Scheduled visit'
 
-        appointment_summary = _section_card(
-            f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-                {_info_row('Date and time', _datetime_label(appointment.start_time), emphasized=True)}
-                {_info_row('Ends', _datetime_label(appointment.end_time))}
-                {_info_row('Provider', provider_name)}
-                {_info_row('Location', location_name)}
-                {_info_row('Service', service_code)}
-            </table>''',
-            accent=PRIMARY,
-            background=SURFACE,
+        event_map = {
+            'scheduled': ('Appointment Confirmed', 'Your appointment has been confirmed.', PRIMARY, SURFACE_TINT),
+            'updated':   ('Appointment Updated',   'Your appointment details have been updated.', CYAN, SURFACE_TINT),
+            'cancelled': ('Appointment Cancelled', 'Your appointment has been cancelled.', ERROR, '#FEF2F2'),
+        }
+        header_text, intro, accent, bg = event_map.get(
+            event, ('Appointment Update', 'Your appointment information has changed.', PRIMARY, SURFACE_TINT)
         )
 
-        closing = 'If you have any questions, please contact your care team.'
-        if event == 'cancelled':
-            closing = 'If you need to reschedule, please contact your care team and they will help arrange a new time.'
+        closing = (
+            'If you need to reschedule, please contact your care team and they will arrange a new time for you.'
+            if event == 'cancelled' else
+            'If you have any questions about your appointment, please contact your care team.'
+        )
 
-        body = f'''
-            <p style="margin:0 0 6px;color:{TEXT_MUTED};font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase">Schedule update</p>
-            <p style="margin:0 0 10px;color:{TEXT};font-size:28px;line-height:1.15;font-weight:700;letter-spacing:-0.02em">{_esc(header_text)}</p>
-            <p style="margin:0 0 24px;color:{TEXT_SECONDARY};font-size:15px;line-height:1.7;font-weight:600">Hello {client_name}, {intro} Please review the appointment details below from {safe_org}.</p>
-            {appointment_summary}
-            <p style="margin:0;color:{TEXT_SECONDARY};font-size:14px;line-height:1.7;font-weight:600">{closing}</p>
-            <p style="margin:18px 0 0;color:{TEXT_MUTED};font-size:13px;line-height:1.7;font-weight:600">Thank you,<br><span style="color:{TEXT};font-weight:700">{safe_org}</span></p>
-        '''
+        appt_rows = (
+            _info_row('Date & Time', '<strong>' + _datetime_label(appointment.start_time) + '</strong>', emphasized=True)
+            + _info_row('End Time', _datetime_label(appointment.end_time))
+            + _info_row('Provider', provider_name)
+            + _info_row('Location', location_name)
+            + _info_row('Service', service_code, last=True)
+        )
+        appt_card = _section_card(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0">' + appt_rows + '</table>',
+            accent=accent, background=bg, title='Appointment Details',
+        )
+
+        body = (
+            _label('Schedule Update')
+            + '<p style="margin:0 0 8px;color:' + TEXT + ';font-size:26px;font-weight:700;letter-spacing:-0.02em">' + _esc(header_text) + '</p>'
+            '<p style="margin:0 0 28px;color:' + TEXT_SECONDARY + ';font-size:14px;line-height:1.7">'
+            'Hello ' + client_name + ', ' + intro + ' See the details from '
+            '<strong style="color:' + TEXT + '">' + safe_org + '</strong> below.</p>'
+            + appt_card
+            + '<p style="margin:0;color:' + TEXT_SECONDARY + ';font-size:13px;line-height:1.7">' + closing + '</p>'
+            '<p style="margin:18px 0 0;color:' + TEXT_MUTED + ';font-size:13px;line-height:1.7">'
+            'Thank you,<br><strong style="color:' + TEXT + '">' + safe_org + '</strong></p>'
+        )
 
         return cls.send_generic(
             to=[appointment.client.email],

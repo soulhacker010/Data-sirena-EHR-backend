@@ -386,6 +386,8 @@ class TreatmentPlanViewSet(viewsets.ModelViewSet):
             'tentative_goals': data.get('tentative_goals', ''),
             'treatment_frequency': data.get('treatment_frequency', ''),
             'treatment_duration': data.get('treatment_duration', ''),
+            'primary_diagnosis': data.get('primary_diagnosis', ''),
+            'secondary_diagnoses': data.get('secondary_diagnoses', []),
         })
 
 

@@ -74,13 +74,18 @@ class Client(OrganizationModel):
 
     def save(self, *args, **kwargs):
         if not self.mrn:
+            prefix = (
+                (self.first_name[0] if self.first_name else 'X') +
+                (self.last_name[0] if self.last_name else 'X')
+            ).upper()
             last = Client.objects.filter(
                 organization=self.organization,
             ).order_by('-mrn').values_list('mrn', flat=True).first()
-            if last and last.isdigit():
-                self.mrn = str(int(last) + 1).zfill(6)
+            if last and len(last) >= 6 and last[-6:].isdigit():
+                next_num = str(int(last[-6:]) + 1).zfill(6)
             else:
-                self.mrn = '000001'
+                next_num = '000001'
+            self.mrn = f"{prefix}{next_num}"
         super().save(*args, **kwargs)
 
 
