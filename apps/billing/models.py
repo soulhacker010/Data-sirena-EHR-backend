@@ -194,6 +194,13 @@ class Claim(BaseModel):
     resubmission_notes = models.TextField(blank=True, default='')
     paid_at = models.DateTimeField(null=True, blank=True)
 
+    # Office Ally EDI fields
+    oa_file_id = models.CharField(max_length=50, blank=True, default='')
+    oa_claim_id = models.CharField(max_length=50, blank=True, default='')
+    oa_status = models.CharField(max_length=20, blank=True, default='')
+    oa_rejection_reason = models.TextField(blank=True, default='')
+    x12_837_raw = models.TextField(blank=True, default='')  # last generated 837P file content
+
     class Meta(BaseModel.Meta):
         ordering = ['-created_at']
         indexes = [
@@ -207,3 +214,69 @@ class Claim(BaseModel):
     @property
     def remaining_balance(self):
         return self.billed_amount - self.insurance_paid - self.write_off_amount
+
+
+class Payer(models.Model):
+    """
+    Office Ally payer directory — loaded from payers.xlsx (9,640 payers).
+    Used to look up Payer ID when building X12 837P files.
+    """
+    name = models.CharField(max_length=255, db_index=True)
+    payer_id = models.CharField(max_length=20)
+    transaction_type = models.CharField(max_length=100, blank=True, default='')
+    available = models.BooleanField(default=True)
+    enrollment_required = models.BooleanField(default=False)
+    supports_837p = models.BooleanField(default=False)
+    supports_eligibility = models.BooleanField(default=False)
+    supports_era = models.BooleanField(default=False)
+    notes = models.TextField(blank=True, default='')
+
+    class Meta:
+        ordering = ['name']
+        indexes = [models.Index(fields=['payer_id'])]
+
+    def __str__(self):
+        return f'{self.name} ({self.payer_id})'
+
+
+class OASubmissionLog(BaseModel):
+    """
+    Tracks every file uploaded to Office Ally SFTP /inbound
+    and every response file retrieved from /outbound.
+    """
+    FILE_TYPE_CHOICES = [
+        ('837p', '837P Claim File'),
+        ('999', '999 Acknowledgement'),
+        ('277ca', '277CA Claim Status'),
+        ('835', '835 ERA Payment'),
+        ('file_summary', 'File Summary'),
+    ]
+    STATUS_CHOICES = [
+        ('uploaded', 'Uploaded'),
+        ('accepted', 'Accepted'),
+        ('rejected', 'Rejected'),
+        ('partial', 'Partial'),
+        ('pending', 'Pending'),
+    ]
+
+    organization = models.ForeignKey(
+        'accounts.Organization',
+        on_delete=models.CASCADE,
+        related_name='oa_submission_logs',
+    )
+    file_type = models.CharField(max_length=20, choices=FILE_TYPE_CHOICES)
+    filename = models.CharField(max_length=255)
+    oa_file_id = models.CharField(max_length=50, blank=True, default='')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
+    claim_count = models.IntegerField(default=0)
+    accepted_count = models.IntegerField(default=0)
+    rejected_count = models.IntegerField(default=0)
+    raw_response = models.TextField(blank=True, default='')
+    uploaded_at = models.DateTimeField(null=True, blank=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta(BaseModel.Meta):
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.file_type.upper()} — {self.filename} ({self.status})'
