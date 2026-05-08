@@ -1,0 +1,14 @@
+{
+  "_comment": "Baker Street Behavioral Health NPI registry. Source: Dr. Joseph Galasso (2026-05-04). NPI 1659841096 is both the Organization (Type 2) and Facility NPI per Theranest Organization Profile export. Used by `python manage.py seed_npis`.",
+  "organization": {
+    "tax_id": "83-2541331",
+    "name": "Baker Street Behavioral Health"
+  },
+  "npis": [
+    {
+      "npi_number": "1659841096",
+      "business_name": "Baker Street Behavioral Health",
+      "is_active": true
+    }
+  ]
+}

@@ -106,6 +106,11 @@ class AppointmentViewSet(viewsets.ModelViewSet):
         return super().destroy(request, *args, **kwargs)
 
     def _send_appointment_email(self, appointment, *, event: str):
+        # E31 Half A: non-session events (staff meetings, personal blocks)
+        # never need a patient email — they have no patient. Skip cleanly
+        # rather than tripping the "client has no email" warning path.
+        if appointment.event_type != 'client_session' or not appointment.client:
+            return
         try:
             from apps.core.email import EmailService
             org_name = self.request.user.organization.name if self.request.user.organization else 'Sirena Health'

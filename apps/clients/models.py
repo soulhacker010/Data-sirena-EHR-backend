@@ -54,6 +54,27 @@ class Client(OrganizationModel):
         default=list,
     )
 
+    # E21 (Dr. Joe 2026-05-04): service categories for color-coding lists.
+    # Multi-valued because clients can receive both Psych and OT, etc. —
+    # which is exactly the case Dr. Joe was working around by creating
+    # duplicate client rows. With this field a single Client carries every
+    # service they're enrolled in.
+    SERVICE_CATEGORY_CHOICES = [
+        ('psychotherapy', 'Psychotherapy'),
+        ('behavior', 'Behavior / ABA'),
+        ('occupational', 'Occupational Therapy'),
+        ('speech', 'Speech Therapy'),
+        ('biofeedback', 'Biofeedback'),
+        ('assessment', 'Assessment'),
+        ('other', 'Other'),
+    ]
+    service_categories = ArrayField(
+        models.CharField(max_length=32),
+        blank=True,
+        default=list,
+        help_text='Service categories this client is enrolled in (Psych, OT, Speech, etc.).',
+    )
+
     is_active = models.BooleanField(default=True)
 
     # Analytics — how the client found us
@@ -73,20 +94,38 @@ class Client(OrganizationModel):
         return f"{self.first_name} {self.last_name}"
 
     def save(self, *args, **kwargs):
-        if not self.mrn:
-            prefix = (
-                (self.first_name[0] if self.first_name else 'X') +
-                (self.last_name[0] if self.last_name else 'X')
-            ).upper()
-            last = Client.objects.filter(
-                organization=self.organization,
-            ).order_by('-mrn').values_list('mrn', flat=True).first()
-            if last and len(last) >= 6 and last[-6:].isdigit():
-                next_num = str(int(last[-6:]) + 1).zfill(6)
-            else:
-                next_num = '000001'
-            self.mrn = f"{prefix}{next_num}"
+        if not self.mrn and self.organization_id:
+            self.mrn = self._generate_mrn()
         super().save(*args, **kwargs)
+
+    def _generate_mrn(self) -> str:
+        """
+        Generate a chart number in the form `<INITIALS><6-digit-number>` where
+        the number is one greater than the highest numeric suffix already used
+        in the organization.
+
+        We must compute the max NUMERICALLY, not by string ordering. Sorting
+        MRNs as strings would let "ZZ000001" outrank "AA000099" alphabetically,
+        causing the next client to be assigned suffix 000002 — colliding with
+        any existing AA000002. Numeric max prevents that whole class of bug.
+        """
+        first_initial = (self.first_name[:1] if self.first_name else 'X').upper()
+        last_initial = (self.last_name[:1] if self.last_name else 'X').upper()
+        prefix = first_initial + last_initial
+
+        existing_mrns = Client.objects.filter(
+            organization=self.organization,
+        ).exclude(mrn='').values_list('mrn', flat=True)
+
+        max_num = 0
+        for mrn in existing_mrns:
+            if len(mrn) >= 6 and mrn[-6:].isdigit():
+                num = int(mrn[-6:])
+                if num > max_num:
+                    max_num = num
+
+        next_num = str(max_num + 1).zfill(6)
+        return f'{prefix}{next_num}'
 
 
 class Authorization(BaseModel):

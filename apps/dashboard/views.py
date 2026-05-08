@@ -41,19 +41,41 @@ class DashboardStatsView(APIView):
 
         total_clients = Client.objects.filter(organization=org, is_active=True).count()
 
+        # "Sessions this month" should reflect what actually happened. A session
+        # counts if EITHER the appointment was manually marked attended OR a
+        # SessionNote linked to it has been signed/co-signed (a signed note is
+        # ground truth that the session occurred — it's why Dr. Joe was seeing
+        # 0 even though he had signed sessions).
         sessions_qs = Appointment.objects.filter(
             organization=org,
             start_time__gte=month_start,
-            status='attended',
-        )
+        ).filter(
+            Q(status='attended')
+            | Q(session_note__status__in=['signed', 'co_signed'])
+        ).distinct()
         if is_clinician:
             sessions_qs = sessions_qs.filter(provider=request.user)
         sessions_this_month = sessions_qs.count()
 
-        # Pending notes = attended appointments with no signed note + draft/unsigned notes + pending co-signs
+        # Pending notes = (a) past appointments without a signed note +
+        #                 (b) draft/completed (unsigned) notes +
+        #                 (c) signed notes pending co-sign on the user.
+        #
+        # E23 fix: an appointment whose start_time has passed but is still
+        # marked 'scheduled' (provider didn't manually flip to 'attended')
+        # must STILL count — Dr. Joe's complaint was that he had a session
+        # 2 days ago and pending_notes didn't reflect it. Same root-cause as
+        # B6 (sessions_this_month): the system can't rely on manual status
+        # transitions, so it derives "did this happen" from start_time
+        # passing or from a signed note appearing.
         attended_no_note_qs = Appointment.objects.filter(
             organization=org,
-            status='attended',
+        ).filter(
+            # Either explicitly attended, OR scheduled-and-time-has-passed.
+            # Cancelled / no_show are deliberately excluded — those don't
+            # need a clinical note.
+            Q(status='attended')
+            | Q(status='scheduled', start_time__lt=now)
         ).exclude(
             session_note__status='signed'
         )
@@ -137,10 +159,19 @@ class DashboardStatsView(APIView):
         ).aggregate(total=Sum('total_amount'))['total'] or 1  # avoid div/0
         collections_rate = round(float(revenue_mtd) / float(total_billed) * 100, 1)
 
-        # Recent activity feed from audit log
-        recent_logs = AuditLog.objects.filter(
+        # Recent activity feed from audit log.
+        # E29 (Dr. Joe 2026-05-04): clinicians must see ONLY their own activity
+        # so other staff's actions (and the implicated clients) don't bleed
+        # into someone else's chart view. Admins/supervisors continue to see
+        # the full org activity. This is a per-user privacy filter — broader
+        # caseload-based filtering would need an explicit AuditLog→Client
+        # link, which is a separate schema decision.
+        recent_logs_qs = AuditLog.objects.filter(
             organization=org,
-        ).select_related('user').order_by('-timestamp')[:10]
+        ).select_related('user')
+        if is_clinician:
+            recent_logs_qs = recent_logs_qs.filter(user=request.user)
+        recent_logs = recent_logs_qs.order_by('-timestamp')[:10]
 
         action_labels = {
             'create': 'Created',
@@ -160,6 +191,49 @@ class DashboardStatsView(APIView):
             for log in recent_logs
         ]
 
+        # E22 (Dr. Joe 2026-05-04): "If I stop doing my intake or treatment
+        # plan, will it save progress? Will it notify me that it is incomplete?"
+        # Auto-save is already in place across all three editors. The missing
+        # piece was a single place that surfaces "drafts you started but
+        # haven't completed". We expose them on the dashboard as a unified
+        # list of three doc types — clinicians get their own; admins org-wide.
+        from apps.clinical.models import IntakeAssessment, TreatmentPlan
+
+        incomplete_qs = {
+            'session_notes': SessionNote.objects.filter(
+                client__organization=org,
+                status__in=['draft', 'completed'],
+            ).select_related('client'),
+            'intakes': IntakeAssessment.objects.filter(
+                client__organization=org,
+                status__in=['draft', 'completed'],
+            ).select_related('client'),
+            'treatment_plans': TreatmentPlan.objects.filter(
+                client__organization=org,
+                status__in=['draft', 'active'],  # 'active' here = unsigned working version
+                is_locked=False,
+            ).select_related('client'),
+        }
+        if is_clinician:
+            incomplete_qs = {
+                k: q.filter(provider=request.user)
+                for k, q in incomplete_qs.items()
+            }
+
+        incomplete_drafts = []
+        for kind, qs in incomplete_qs.items():
+            for obj in qs.order_by('-updated_at')[:5]:
+                incomplete_drafts.append({
+                    'kind': kind,  # 'session_notes' | 'intakes' | 'treatment_plans'
+                    'id': str(obj.id),
+                    'client_name': obj.client.full_name if obj.client else '—',
+                    'status': obj.status,
+                    'updated_at': obj.updated_at.isoformat(),
+                })
+        # Surface the most recently touched incomplete docs first across types.
+        incomplete_drafts.sort(key=lambda d: d['updated_at'], reverse=True)
+        incomplete_drafts = incomplete_drafts[:8]  # cap so the widget stays small
+
         return Response({
             'total_clients': total_clients,
             'sessions_this_month': sessions_this_month,
@@ -167,6 +241,7 @@ class DashboardStatsView(APIView):
             'revenue_mtd': float(revenue_mtd),
             'upcoming_appointments': upcoming_data,
             'recent_activity': recent_activity,
+            'incomplete_drafts': incomplete_drafts,
             'billing_overview': {
                 'invoices_pending': invoices_pending,
                 'outstanding_balance': float(outstanding_balance),

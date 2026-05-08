@@ -130,7 +130,7 @@ def _create_batch_invoices(prepared_items_by_client, organization, invoice_date,
 
 
 from apps.core.permissions import IsBiller, IsClinicalStaff
-from .models import Invoice, InvoiceItem, Payment, Claim
+from .models import Invoice, InvoiceItem, Payment, Claim, Payer
 from .serializers import (
     InvoiceSerializer,
     InvoiceCreateSerializer,
@@ -142,6 +142,7 @@ from .serializers import (
     PostClaimPaymentSerializer,
     WriteOffSerializer,
     BatchInvoiceSerializer,
+    PayerSerializer,
 )
 from .service_catalog import resolve_billing_defaults
 from .cpt_catalog import CPTCatalog
@@ -488,15 +489,99 @@ class ClaimViewSet(viewsets.ModelViewSet):
             except Exception:
                 pass  # Never break main flow for notifications
 
+    @action(detail=True, methods=['get'], url_path='validate')
+    def validate_for_submission(self, request, pk=None):
+        """
+        GET /api/v1/claims/{id}/validate/ — run pre-submission checks.
+
+        Returns {ok: bool, errors: [...], warnings: [...]} so the UI can
+        surface missing fields before the user hits Submit.
+        """
+        from apps.billing.services.claim_validator import validate_claim
+        claim = self.get_object()
+        # Prefetch what the validator needs
+        claim = Claim.objects.select_related(
+            'client', 'invoice', 'invoice__organization'
+        ).prefetch_related('invoice__items', 'invoice__organization__npis').get(pk=claim.pk)
+        return Response(validate_claim(claim))
+
     @action(detail=True, methods=['post'], url_path='submit')
     def submit(self, request, pk=None):
-        """POST /api/v1/claims/{id}/submit/ — mark as submitted."""
-        claim = self.get_object()
+        """
+        POST /api/v1/claims/{id}/submit/ — generate the 837P file and
+        (if OA SFTP is configured) upload it to Office Ally.
+
+        Refuses to submit if pre-submission validation fails. If SFTP creds
+        are missing, the 837P is still generated and stored on the claim so
+        it can be uploaded later.
+        """
+        from apps.billing.services.claim_validator import validate_claim
+        from apps.billing.services.x12_837p import generate_837p
+        from apps.billing.services.office_ally import upload_claim_file
+        from apps.billing.models import OASubmissionLog
+
+        claim = Claim.objects.select_related(
+            'client', 'invoice', 'invoice__organization',
+        ).prefetch_related('invoice__items', 'invoice__organization__npis').get(pk=pk)
+
         if claim.status not in ('created', 'denied'):
             return Response(
                 {'error': True, 'message': 'Claim cannot be submitted from current status'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        validation = validate_claim(claim)
+        if not validation['ok']:
+            return Response(
+                {
+                    'error': True,
+                    'message': 'Claim has validation errors. Fix them before submitting.',
+                    'validation': validation,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Generate the X12 file
+        x12_content = generate_837p(claim)
+        now = timezone.now()
+        # OATEST prefix so Office Ally treats this as a free test submission
+        # until we're ready to go live.
+        use_test = not getattr(settings, 'OA_GO_LIVE', False)
+        prefix = 'OATEST_' if use_test else ''
+        filename = f"{prefix}837P_{claim.id.hex[:8]}_{now:%Y%m%d%H%M%S}.txt"
+
+        # Log every submission attempt — regardless of upload success
+        org = claim.invoice.organization
+        log = OASubmissionLog.objects.create(
+            organization=org,
+            file_type='837p',
+            filename=filename,
+            claim_count=1,
+            raw_response=x12_content[:50000],
+            status='pending',
+        )
+
+        # Try to upload — gracefully skip if SFTP isn't configured yet
+        upload_status = 'generated'
+        upload_message = 'Claim file generated. SFTP upload pending credentials.'
+        try:
+            upload_claim_file(x12_content, filename)
+            upload_status = 'uploaded'
+            upload_message = f'Claim file uploaded to Office Ally: {filename}'
+            log.status = 'uploaded'
+            log.uploaded_at = now
+        except RuntimeError as e:
+            # Expected path while OA creds are missing — don't fail the request
+            logger.info('OA SFTP upload skipped: %s', e)
+            log.status = 'pending'
+        except Exception as e:
+            logger.error('OA SFTP upload failed for %s: %s', filename, e, exc_info=True)
+            log.status = 'rejected'
+            log.raw_response = f'{log.raw_response}\n\n[UPLOAD ERROR]\n{e}'[:50000]
+            upload_status = 'upload_failed'
+            upload_message = f'Claim file generated, but upload failed: {e}'
+        finally:
+            log.save()
 
         if claim.status == 'denied':
             claim.resubmission_count += 1
@@ -507,12 +592,23 @@ class ClaimViewSet(viewsets.ModelViewSet):
         else:
             claim.status = 'submitted'
 
-        claim.submitted_at = timezone.now()
+        claim.submitted_at = now
+        claim.oa_file_id = filename
+        claim.x12_837_raw = x12_content
         claim.save(update_fields=[
             'status', 'submitted_at', 'resubmission_count',
-            'resubmission_notes', 'updated_at',
+            'resubmission_notes', 'oa_file_id', 'x12_837_raw', 'updated_at',
         ])
-        return Response(ClaimSerializer(claim).data)
+
+        return Response({
+            **ClaimSerializer(claim).data,
+            '_submission': {
+                'status': upload_status,
+                'message': upload_message,
+                'filename': filename,
+                'test_mode': use_test,
+            },
+        })
 
     @action(detail=True, methods=['post'], url_path='post-payment')
     def post_payment(self, request, pk=None):
@@ -650,6 +746,51 @@ class ClientClaimsView(generics.ListAPIView):
             client_id=self.kwargs['client_id'],
             client__organization=self.request.user.organization,
         ).select_related('invoice')
+
+
+class PayerViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Read-only lookup for Office Ally payers (populated via `manage.py seed_payers`).
+
+    GET /api/v1/payers/
+        ?search=<query>       — match against name or payer_id (prefix/icontains)
+        ?supports_837p=true   — filter to 837P-capable payers only
+        ?available=true       — filter to currently-available payers only
+        ?limit=<n>            — cap results (default: 50, max: 200)
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = PayerSerializer
+    pagination_class = None  # Frontend autocomplete expects a plain array
+
+    def get_queryset(self):
+        from django.db.models import Q
+
+        qs = Payer.objects.all()
+
+        search = (self.request.query_params.get('search') or '').strip()
+        if search:
+            qs = qs.filter(
+                Q(name__icontains=search)
+                | Q(payer_id__icontains=search)
+            )
+
+        def _is_true(value: str) -> bool:
+            return value.lower() in ('1', 'true', 'yes')
+
+        supports_837p = self.request.query_params.get('supports_837p')
+        if supports_837p is not None:
+            qs = qs.filter(supports_837p=_is_true(supports_837p))
+
+        available = self.request.query_params.get('available')
+        if available is not None:
+            qs = qs.filter(available=_is_true(available))
+
+        try:
+            limit = min(int(self.request.query_params.get('limit', 50)), 200)
+        except (TypeError, ValueError):
+            limit = 50
+
+        return qs.order_by('name')[:limit]
 
 
 class CPTSuggestionView(APIView):

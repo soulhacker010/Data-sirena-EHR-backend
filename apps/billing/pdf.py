@@ -92,9 +92,28 @@ def generate_invoice_pdf(invoice, organization=None):
 
     # ── Header: Practice Info + Invoice Meta ──
     org_name = organization.name if organization else 'Sirena Health'
-    org_address = organization.address if organization else ''
     org_email = organization.contact_email if organization else ''
     org_phone = organization.contact_phone if organization else ''
+
+    # Prefer the org's structured primary Location (city/state/zip parsed) over
+    # the free-text Organization.address field. The primary location is the
+    # legally registered billing address that goes on claim forms, so it's also
+    # what should print on the invoice header. Falls back to the free-text
+    # field if no primary location exists yet.
+    primary_location = None
+    if organization is not None:
+        primary_location = organization.locations.filter(
+            is_primary=True, is_active=True,
+        ).first()
+
+    if primary_location is not None:
+        org_address = (
+            f'{primary_location.address}, '
+            f'{primary_location.city}, '
+            f'{primary_location.state} {primary_location.zip_code}'
+        )
+    else:
+        org_address = organization.address if organization else ''
 
     header_left = []
     header_left.append(Paragraph(org_name, styles['BrandTitle']))
@@ -188,10 +207,34 @@ def generate_invoice_pdf(invoice, organization=None):
     elements.append(details_table)
     elements.append(Spacer(1, 20))
 
+    # ── Service Location(s) ──
+    # Billing/compliance requirement (Dr. Joe 2026-05-04): every billing form
+    # must display where services were rendered. We collect distinct locations
+    # from the line-item appointments and list them here, deduped and ordered
+    # so the section is stable and human-readable.
+    items = list(invoice.items.select_related('appointment__location').all())
+    seen_locations: list = []
+    seen_ids: set = set()
+    for itm in items:
+        appt = getattr(itm, 'appointment', None)
+        loc = getattr(appt, 'location', None) if appt else None
+        if loc is not None and loc.id not in seen_ids:
+            seen_ids.add(loc.id)
+            seen_locations.append(loc)
+
+    if seen_locations:
+        elements.append(Paragraph('Service Location(s)', styles['SectionHeader']))
+        for loc in seen_locations:
+            line = f'<b>{loc.name}</b> — {loc.address}'
+            if loc.city or loc.state or loc.zip_code:
+                line += f', {loc.city}, {loc.state} {loc.zip_code}'.replace(' , ', ', ')
+            elements.append(Paragraph(line, styles['InfoValue']))
+        elements.append(Spacer(1, 12))
+
     # ── Line Items Table ──
     elements.append(Paragraph('Services', styles['SectionHeader']))
 
-    items = list(invoice.items.all())
+
     item_data = [['CPT Code', 'Description', 'Units', 'Rate', 'Amount']]
     for item in items:
         item_data.append([

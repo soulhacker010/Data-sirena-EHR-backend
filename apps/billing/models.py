@@ -222,8 +222,8 @@ class Payer(models.Model):
     Used to look up Payer ID when building X12 837P files.
     """
     name = models.CharField(max_length=255, db_index=True)
-    payer_id = models.CharField(max_length=20)
-    transaction_type = models.CharField(max_length=100, blank=True, default='')
+    payer_id = models.CharField(max_length=40)
+    transaction_type = models.CharField(max_length=255, blank=True, default='')
     available = models.BooleanField(default=True)
     enrollment_required = models.BooleanField(default=False)
     supports_837p = models.BooleanField(default=False)

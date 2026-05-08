@@ -13,26 +13,95 @@ logger = logging.getLogger(__name__)
 @shared_task
 def submit_claim_to_clearinghouse(claim_id):
     """
-    Background task: Submit a claim to the insurance clearinghouse.
-
-    In production, this would integrate with a clearinghouse API
-    (e.g., Change Healthcare, Availity, Office Ally).
+    Background task: Generate X12 837P and upload to Office Ally SFTP.
+    Mirrors the synchronous ClaimViewSet.submit() path — use this for
+    bulk/batched submissions off the request/response cycle.
     """
-    from .models import Claim
+    from .models import Claim, OASubmissionLog
+    from .services.claim_validator import validate_claim
+    from .services.x12_837p import generate_837p
+    from .services.office_ally import upload_claim_file
+    from django.conf import settings as dj_settings
     from django.utils import timezone
 
     try:
-        claim = Claim.objects.get(id=claim_id)
-        # PENDING: Office Ally clearinghouse API integration.
-        # Waiting on Office Ally to provide API credentials/docs.
-        # Once received, replace this stub with actual EDI 837 submission.
-        # For now, just mark as submitted locally.
-        claim.status = 'submitted'
-        claim.submitted_at = timezone.now()
-        claim.save(update_fields=['status', 'submitted_at', 'updated_at'])
-        return {'status': 'submitted', 'claim_id': str(claim_id)}
+        claim = Claim.objects.select_related(
+            'client', 'invoice', 'invoice__organization',
+        ).prefetch_related(
+            'invoice__items', 'invoice__organization__npis',
+        ).get(id=claim_id)
     except Claim.DoesNotExist:
         return {'status': 'error', 'message': 'Claim not found'}
+
+    validation = validate_claim(claim)
+    if not validation['ok']:
+        return {'status': 'validation_failed', 'errors': validation['errors']}
+
+    x12_content = generate_837p(claim)
+    now = timezone.now()
+    use_test = not getattr(dj_settings, 'OA_GO_LIVE', False)
+    prefix = 'OATEST_' if use_test else ''
+    filename = f"{prefix}837P_{claim.id.hex[:8]}_{now:%Y%m%d%H%M%S}.txt"
+
+    log = OASubmissionLog.objects.create(
+        organization=claim.invoice.organization,
+        file_type='837p',
+        filename=filename,
+        claim_count=1,
+        raw_response=x12_content[:50000],
+        status='pending',
+    )
+
+    try:
+        upload_claim_file(x12_content, filename)
+        log.status = 'uploaded'
+        log.uploaded_at = now
+        log.save(update_fields=['status', 'uploaded_at', 'updated_at'])
+        claim.status = 'submitted' if claim.status != 'denied' else 'resubmitted'
+        claim.submitted_at = now
+        claim.oa_file_id = filename
+        claim.x12_837_raw = x12_content
+        claim.save(update_fields=[
+            'status', 'submitted_at', 'oa_file_id', 'x12_837_raw', 'updated_at',
+        ])
+        return {'status': 'uploaded', 'claim_id': str(claim_id), 'filename': filename}
+    except RuntimeError as e:
+        # SFTP not configured — keep the generated file on the log for later
+        return {'status': 'generated_not_uploaded', 'message': str(e), 'filename': filename}
+    except Exception as e:
+        logger.error('Claim upload failed for %s: %s', claim_id, e, exc_info=True)
+        log.status = 'rejected'
+        log.save(update_fields=['status', 'updated_at'])
+        return {'status': 'error', 'claim_id': str(claim_id), 'message': str(e)}
+
+
+@shared_task
+def poll_oa_outbound():
+    """
+    Periodic task: Download and process new response files from
+    Office Ally SFTP /outbound. Parses 999, 277CA, 835, and File Summary
+    files, then updates Claim/Payment records accordingly.
+
+    Wire into Celery Beat (see config/celery.py beat_schedule).
+    """
+    from apps.accounts.models import Organization
+    from .services.office_ally import process_outbound_files, _is_configured
+
+    if not _is_configured():
+        logger.info('OA SFTP not configured — skipping outbound poll')
+        return {'status': 'skipped', 'reason': 'sftp_not_configured'}
+
+    # OA SFTP is per-account, so we process once per organization that has
+    # any submission history. For single-tenant deployments this is just one.
+    results = {}
+    orgs = Organization.objects.filter(oa_submission_logs__isnull=False).distinct()
+    for org in orgs:
+        try:
+            results[str(org.id)] = process_outbound_files(org)
+        except Exception as e:
+            logger.error('OA outbound poll failed for org %s: %s', org.id, e, exc_info=True)
+            results[str(org.id)] = {'error': str(e)}
+    return results
 
 
 @shared_task(

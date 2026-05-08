@@ -9,12 +9,13 @@ Coordinated with frontend api/notes.ts:
 - /api/v1/note-templates/            → NoteTemplateViewSet (original)
 - /api/v1/treatment-plans/           → TreatmentPlanViewSet
 - /api/v1/documents/                 → DocumentViewSet
+- /api/v1/contact-notes/             → ContactNoteViewSet (E19)
 """
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 from .views import (
     NoteTemplateViewSet, SessionNoteViewSet, TreatmentPlanViewSet,
-    IntakeAssessmentViewSet, DocumentViewSet,
+    IntakeAssessmentViewSet, DocumentViewSet, ContactNoteViewSet,
 )
 
 router = DefaultRouter()
@@ -23,6 +24,7 @@ router.register(r'notes', SessionNoteViewSet, basename='session-note')
 router.register(r'treatment-plans', TreatmentPlanViewSet, basename='treatment-plan')
 router.register(r'intakes', IntakeAssessmentViewSet, basename='intake-assessment')
 router.register(r'documents', DocumentViewSet, basename='document')
+router.register(r'contact-notes', ContactNoteViewSet, basename='contact-note')
 
 # Frontend calls GET /notes/templates/ — add an alias
 templates_router = DefaultRouter()

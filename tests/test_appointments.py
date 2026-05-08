@@ -156,3 +156,118 @@ class TestAppointmentDelete:
         resp = admin_client.delete(url)
         assert resp.status_code == status.HTTP_204_NO_CONTENT
         mock_send_appointment_email.assert_called_once()
+
+
+@pytest.mark.django_db
+class TestNonclientAppointments:
+    """E31 Half A: appointments without a client (staff meetings, personal
+    blocks, training). Lets directors and clinicians block off time without
+    needing to fake a client row, which was Dr. Joe's specific workflow gap."""
+    url = '/api/v1/appointments/'
+
+    def _base(self, **overrides):
+        base = {
+            'provider_id': '<set-in-test>',
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+        }
+        base.update(overrides)
+        return base
+
+    def test_create_staff_meeting_without_client(self, admin_client, admin_user):
+        resp = admin_client.post(self.url, {
+            'provider_id': str(admin_user.id),
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+            'event_type': 'staff_meeting',
+            'title': 'Q3 Directors Meeting',
+        }, format='json')
+        assert resp.status_code == status.HTTP_201_CREATED
+        assert resp.data['event_type'] == 'staff_meeting'
+        assert resp.data['title'] == 'Q3 Directors Meeting'
+        # AppointmentCreateSerializer surfaces client_id (the FK column),
+        # which should be null for non-session events.
+        assert resp.data.get('client_id') in (None, '')
+
+    def test_client_session_still_requires_client(self, admin_client, admin_user):
+        """Backwards compat: omitting client for the default event_type
+        (client_session) is rejected — exactly as before."""
+        resp = admin_client.post(self.url, {
+            'provider_id': str(admin_user.id),
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+            # no client_id, no event_type → defaults to client_session
+        }, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+        assert 'client_id' in (resp.data.get('errors') or resp.data)
+
+    def test_staff_meeting_with_client_rejected(
+        self, admin_client, admin_user, sample_client,
+    ):
+        """A non-session event must NOT carry a client — caught at serializer
+        level so we surface a clean 400, not an IntegrityError."""
+        resp = admin_client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'provider_id': str(admin_user.id),
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+            'event_type': 'staff_meeting',
+            'title': 'Should not have client',
+        }, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_staff_meeting_without_title_rejected(self, admin_client, admin_user):
+        """Non-session events must have a title — otherwise the calendar has
+        nothing to render."""
+        resp = admin_client.post(self.url, {
+            'provider_id': str(admin_user.id),
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+            'event_type': 'staff_meeting',
+            # no title
+        }, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_invalid_event_type_rejected(self, admin_client, admin_user):
+        resp = admin_client.post(self.url, {
+            'provider_id': str(admin_user.id),
+            'start_time': '2026-05-15T13:00:00Z',
+            'end_time': '2026-05-15T14:00:00Z',
+            'event_type': 'not_a_real_type',
+            'title': 'X',
+        }, format='json')
+        assert resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    def test_db_constraint_blocks_session_without_client(
+        self, admin_user, org,
+    ):
+        """Belt-and-suspenders: even bypassing the API, a client_session row
+        with null client must be rejected by the DB."""
+        from apps.scheduling.models import Appointment
+        from django.db.utils import IntegrityError
+        with pytest.raises(IntegrityError):
+            Appointment.objects.create(
+                organization=org, provider=admin_user,
+                start_time='2026-05-15T13:00:00Z',
+                end_time='2026-05-15T14:00:00Z',
+                event_type='client_session',
+                client=None,
+            )
+
+    def test_calendar_list_includes_nonclient_events(
+        self, admin_client, admin_user, org,
+    ):
+        """Calendar fetches everything in the org — staff events appear
+        alongside client sessions in the same payload."""
+        from apps.scheduling.models import Appointment
+        Appointment.objects.create(
+            organization=org, provider=admin_user,
+            start_time='2026-05-15T13:00:00Z',
+            end_time='2026-05-15T14:00:00Z',
+            event_type='staff_meeting',
+            title='Visible Staff Event',
+        )
+        resp = admin_client.get(self.url)
+        assert resp.status_code == status.HTTP_200_OK
+        titles = [a.get('title') for a in resp.data]
+        assert 'Visible Staff Event' in titles

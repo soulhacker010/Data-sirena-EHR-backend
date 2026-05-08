@@ -23,6 +23,7 @@ from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import generics, serializers as drf_serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
@@ -62,14 +63,23 @@ class LoginView(generics.GenericAPIView):
     serializer_class = LoginSerializer
 
     def post(self, request):
+        from apps.audit.utils import write_audit
         serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
+
+        if not serializer.is_valid():
+            # Failed login attempt — log before raising
+            write_audit(request, 'failed_login', 'auth', changes={
+                'username': request.data.get('email', request.data.get('username', '')),
+            })
+            raise serializer.errors.__class__(serializer.errors)
 
         user = serializer.validated_data['user']
         user.last_login = timezone.now()
         user.save(update_fields=['last_login'])
 
         refresh = RefreshToken.for_user(user)
+
+        write_audit(request, 'login', 'auth', changes={'user_id': str(user.id), 'email': user.email})
 
         return Response({
             'access': str(refresh.access_token),
@@ -113,6 +123,9 @@ class ChangePasswordView(generics.GenericAPIView):
         request.user.set_password(serializer.validated_data['new_password'])
         request.user.save(update_fields=['password'])
 
+        from apps.audit.utils import write_audit
+        write_audit(request, 'password_change', 'auth', changes={'user_id': str(request.user.id)})
+
         return Response({'message': 'Password updated successfully'})
 
 
@@ -126,16 +139,16 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        # FIX #11: Log blacklist errors instead of silently swallowing
-        logger = logging.getLogger(__name__)
+        from apps.audit.utils import write_audit
+        _logger = logging.getLogger(__name__)
         try:
             refresh_token = request.data.get('refresh')
             if refresh_token:
                 token = RefreshToken(refresh_token)
                 token.blacklist()
         except Exception as e:
-            # Token might already be invalid or blacklisted — log it
-            logger.warning(f'Token blacklist failed during logout: {e}')
+            _logger.warning('Token blacklist failed during logout: %s', e)
+        write_audit(request, 'logout', 'auth')
         return Response({'message': 'Logged out successfully'}, status=status.HTTP_200_OK)
 
 
@@ -232,6 +245,54 @@ class UserViewSet(viewsets.ModelViewSet):
 
         instance.is_active = False
         instance.save(update_fields=['is_active'])
+
+    @action(detail=True, methods=['post'], url_path='send-reset-link')
+    def send_reset_link(self, request, pk=None):
+        """
+        Admin-triggered password reset email. Sends the same reset link the
+        user would receive from /forgot-password, but lets the admin do it
+        from User Management without asking the staff member to log out and
+        click "Forgot password" themselves (B12).
+        """
+        logger = logging.getLogger(__name__)
+        user = self.get_object()
+
+        if not user.is_active:
+            return Response(
+                {'detail': 'Cannot send a reset link to an inactive user.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not user.email:
+            return Response(
+                {'detail': 'This user has no email address on file.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        uid = urlsafe_base64_encode(force_bytes(str(user.pk)))
+        token = default_token_generator.make_token(user)
+
+        try:
+            from django.conf import settings
+            from apps.core.email import EmailService
+            frontend_url = getattr(settings, 'FRONTEND_BASE_URL', '').rstrip('/')
+            reset_url = f'{frontend_url}/reset-password?uid={uid}&token={token}'
+            org_name = user.organization.name if user.organization else 'Sirena Health'
+            EmailService.send_password_reset_email(user, reset_url, org_name=org_name)
+        except Exception as e:
+            logger.error(
+                f'Admin-triggered reset email failed for {user.email}: {e}',
+                exc_info=True,
+            )
+            return Response(
+                {'detail': 'Failed to send reset email. Check email service configuration.'},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
+        return Response({
+            'detail': f'Password reset link sent to {user.email}.',
+            'email': user.email,
+        })
 
 
 class PasswordResetRequestView(APIView):

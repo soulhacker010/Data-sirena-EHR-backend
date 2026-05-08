@@ -1,11 +1,12 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from .views import InvoiceViewSet, PaymentViewSet, ClaimViewSet, ClientClaimsView, CPTSuggestionView, ModifierSuggestionView
+from .views import InvoiceViewSet, PaymentViewSet, ClaimViewSet, ClientClaimsView, CPTSuggestionView, ModifierSuggestionView, PayerViewSet
 
 router = DefaultRouter()
 router.register(r'invoices', InvoiceViewSet, basename='invoice')
 router.register(r'payments', PaymentViewSet, basename='payment')
 router.register(r'claims', ClaimViewSet, basename='claim')
+router.register(r'payers', PayerViewSet, basename='payer')
 
 urlpatterns = [
     path('', include(router.urls)),

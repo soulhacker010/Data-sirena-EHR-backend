@@ -7,7 +7,10 @@ Frontend expects:
 - Plus computed: template_name, co_signer_name, service_code, session_date
 """
 from rest_framework import serializers
-from .models import NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment, Document
+from .models import (
+    NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment,
+    Document, Addendum, ContactNote,
+)
 
 
 class SessionNoteFieldsMixin:
@@ -400,3 +403,103 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     def get_file_path(self, obj):
         return obj.file_path or ''
+
+
+class AddendumSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for an Addendum. Body + author + timestamp; the parent
+    is implicit from the URL the client requested it from (one of the nested
+    `/notes/{id}/addendums/`, `/intakes/{id}/addendums/`,
+    `/treatment-plans/{id}/addendums/` endpoints), so we don't return the
+    parent IDs here — they would be redundant and easy to misuse.
+    """
+    created_by_id = serializers.UUIDField(source='created_by.id', read_only=True)
+    created_by_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Addendum
+        fields = [
+            'id', 'body',
+            'created_by_id', 'created_by_name',
+            'created_at',
+        ]
+        read_only_fields = fields  # Addendums are immutable after creation.
+
+    def get_created_by_name(self, obj):
+        return obj.created_by.full_name if obj.created_by else None
+
+
+class AddendumWriteSerializer(serializers.ModelSerializer):
+    """Write serializer — only `body` is user-supplied. Parent + author are
+    set by the view from URL kwargs and request.user."""
+
+    class Meta:
+        model = Addendum
+        fields = ['body']
+
+    def validate_body(self, value: str) -> str:
+        stripped = (value or '').strip()
+        if not stripped:
+            raise serializers.ValidationError('Addendum body cannot be empty.')
+        return stripped
+
+    def to_representation(self, instance):
+        return AddendumSerializer(instance, context=self.context).data
+
+
+class ContactNoteSerializer(serializers.ModelSerializer):
+    """
+    Read serializer for a non-billable client contact log entry (E19).
+
+    Returns nested-friendly fields the frontend uses for client detail
+    feeds (client_name, provider_name, human-readable contact_type_display).
+    """
+    client_id = serializers.UUIDField(source='client.id', read_only=True)
+    client_name = serializers.SerializerMethodField()
+    provider_id = serializers.UUIDField(source='provider.id', read_only=True)
+    provider_name = serializers.SerializerMethodField()
+    contact_type_display = serializers.CharField(
+        source='get_contact_type_display', read_only=True,
+    )
+
+    class Meta:
+        model = ContactNote
+        fields = [
+            'id', 'client_id', 'client_name', 'provider_id', 'provider_name',
+            'contact_date', 'contact_type', 'contact_type_display',
+            'summary', 'duration_minutes',
+            'created_at', 'updated_at',
+        ]
+        read_only_fields = [
+            'id', 'client_id', 'provider_id',
+            'created_at', 'updated_at',
+        ]
+
+    def get_client_name(self, obj):
+        return obj.client.full_name if obj.client else None
+
+    def get_provider_name(self, obj):
+        return obj.provider.full_name if obj.provider else None
+
+
+class ContactNoteWriteSerializer(serializers.ModelSerializer):
+    """Write serializer — accepts client_id explicitly. provider is set
+    server-side from request.user."""
+    client_id = serializers.UUIDField(required=True)
+
+    class Meta:
+        model = ContactNote
+        fields = [
+            'client_id', 'contact_date', 'contact_type', 'summary',
+            'duration_minutes',
+        ]
+
+    def validate_summary(self, value: str) -> str:
+        stripped = (value or '').strip()
+        if not stripped:
+            raise serializers.ValidationError('Summary cannot be empty.')
+        return stripped
+
+    def to_representation(self, instance):
+        return ContactNoteSerializer(instance, context=self.context).data
+

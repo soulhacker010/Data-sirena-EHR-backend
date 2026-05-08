@@ -60,7 +60,7 @@ class ClientListSerializer(serializers.ModelSerializer):
             'emergency_contact_name', 'emergency_contact_phone',
             'insurance_primary_name', 'insurance_primary_id', 'insurance_primary_group',
             'insurance_secondary_name', 'insurance_secondary_id',
-            'diagnosis_codes', 'is_active',
+            'diagnosis_codes', 'service_categories', 'is_active',
             'created_at', 'updated_at',
         ]
 
@@ -71,6 +71,19 @@ class ClientListSerializer(serializers.ModelSerializer):
                 (today.month, today.day) < (obj.date_of_birth.month, obj.date_of_birth.day)
             )
         return None
+
+    def validate_service_categories(self, value: list) -> list:
+        """E21: reject unknown category slugs and dedupe.
+        ArrayField of CharField doesn't enforce choices at the DB level."""
+        valid = {key for key, _ in Client.SERVICE_CATEGORY_CHOICES}
+        unknown = [v for v in (value or []) if v not in valid]
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown service category/categories: {", ".join(sorted(unknown))}. '
+                f'Allowed: {sorted(valid)}.'
+            )
+        seen: set = set()
+        return [v for v in value if not (v in seen or seen.add(v))]
 
 
 class ClientSerializer(ClientListSerializer):
@@ -166,6 +179,19 @@ class ClientCreateSerializer(serializers.ModelSerializer):
             'emergency_contact_name', 'emergency_contact_phone',
             'insurance_primary_name', 'insurance_primary_id', 'insurance_primary_group',
             'insurance_secondary_name', 'insurance_secondary_id',
-            'diagnosis_codes',
+            'diagnosis_codes', 'service_categories',
         ]
         read_only_fields = ['id']
+
+    def validate_service_categories(self, value: list) -> list:
+        """Reject unknown category slugs early so the UI doesn't accept typos."""
+        valid = {key for key, _ in Client.SERVICE_CATEGORY_CHOICES}
+        unknown = [v for v in (value or []) if v not in valid]
+        if unknown:
+            raise serializers.ValidationError(
+                f'Unknown service category/categories: {", ".join(sorted(unknown))}. '
+                f'Allowed: {sorted(valid)}.'
+            )
+        # Dedupe while preserving order
+        seen = set()
+        return [v for v in value if not (v in seen or seen.add(v))]

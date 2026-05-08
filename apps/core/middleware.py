@@ -11,6 +11,15 @@ from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
 
+SENSITIVE_KEYS = {
+    'password', 'password1', 'password2', 'old_password',
+    'new_password', 'confirm_password',
+    'ssn', 'social_security', 'social_security_number',
+    'date_of_birth', 'dob',
+    'credit_card', 'card_number', 'cvv', 'cvc',
+    'token', 'secret', 'api_key', 'refresh',
+}
+
 
 class OrganizationMiddleware(MiddlewareMixin):
     """
@@ -37,85 +46,95 @@ class AuditMiddleware(MiddlewareMixin):
     """
     Automatically logs all write operations (POST, PUT, PATCH, DELETE)
     to the audit_logs table for HIPAA compliance.
+
+    Explicit events (login, sign, PHI access, export, etc.) are written
+    directly from views using apps.audit.utils.write_audit().
     """
 
     WRITE_METHODS = ('POST', 'PUT', 'PATCH', 'DELETE')
-    SKIP_PATHS = ('/admin/', '/api/v1/auth/login/', '/api/v1/auth/token/refresh/')
+    # Skip paths handled by explicit view-level audit calls
+    SKIP_PATHS = (
+        '/api/v1/auth/login/',
+        '/api/v1/auth/token/refresh/',
+        '/api/v1/auth/logout/',
+        '/api/v1/auth/password/',
+    )
+
+    def process_request(self, request):
+        """
+        Capture request body BEFORE the view consumes it.
+
+        Once a DRF view reads request.data, the underlying stream is drained
+        and request.body becomes inaccessible. So we snapshot the body here
+        and stash it on the request for process_response to read.
+        """
+        if request.method not in self.WRITE_METHODS:
+            return
+        if not (request.content_type and 'json' in request.content_type):
+            return
+        try:
+            request._audit_body = request.body
+        except Exception:
+            request._audit_body = None
 
     def process_response(self, request, response):
-        # Only log write operations
         if request.method not in self.WRITE_METHODS:
             return response
 
-        # Skip certain paths
         if any(request.path.startswith(skip) for skip in self.SKIP_PATHS):
             return response
 
-        # Only log successful operations
         if response.status_code >= 400:
             return response
 
-        # Only log for authenticated users
         if not hasattr(request, 'user') or not request.user.is_authenticated:
             return response
 
         try:
             from apps.audit.models import AuditLog
+            from apps.audit.utils import extract_resource_from_path
 
-            # Determine action from method
             action_map = {
                 'POST': 'create',
                 'PUT': 'update',
-                'PATCH': 'partial_update',
+                'PATCH': 'update',
                 'DELETE': 'delete',
             }
 
-            # Parse request body for changes
             changes = None
-            if request.content_type and 'json' in request.content_type:
+            body = getattr(request, '_audit_body', None)
+            if body:
                 try:
-                    changes = json.loads(request.body.decode('utf-8')) if request.body else None
+                    raw = json.loads(body.decode('utf-8'))
+                    if raw and isinstance(raw, dict):
+                        changes = {
+                            k: '***REDACTED***' if k.lower() in SENSITIVE_KEYS else v
+                            for k, v in raw.items()
+                        }
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
 
-            # FIX PII-1: Mask sensitive fields before storing in audit log.
-            # This prevents passwords, SSNs, and other PII from being stored
-            # in plaintext audit records.
-            if changes and isinstance(changes, dict):
-                SENSITIVE_KEYS = {
-                    'password', 'password1', 'password2', 'old_password',
-                    'new_password', 'confirm_password',
-                    'ssn', 'social_security', 'social_security_number',
-                    'date_of_birth', 'dob',
-                    'credit_card', 'card_number', 'cvv', 'cvc',
-                    'token', 'secret', 'api_key', 'refresh',
-                }
-                changes = {
-                    k: '***REDACTED***' if k.lower() in SENSITIVE_KEYS else v
-                    for k, v in changes.items()
-                }
-
-            # Extract table/record info from the URL path
             path_parts = [p for p in request.path.split('/') if p]
+            table_name, record_id = extract_resource_from_path(path_parts)
+
+            org = getattr(request, 'organization', None)
 
             AuditLog.objects.create(
-                organization=getattr(request, 'organization', None),
+                organization=org,
                 user=request.user,
                 action=action_map.get(request.method, request.method.lower()),
-                table_name=path_parts[-2] if len(path_parts) >= 2 else path_parts[-1] if path_parts else 'unknown',
+                table_name=table_name,
+                record_id=record_id or None,
                 ip_address=self._get_client_ip(request),
                 user_agent=request.META.get('HTTP_USER_AGENT', ''),
                 changes=changes,
             )
         except Exception as e:
-            # FIX #12: Never let audit logging break the request,
-            # but DO log the error so we can debug it.
-            logger.warning(f'Audit log creation failed: {e}')
+            logger.warning('Audit log creation failed: %s', e)
 
         return response
 
     def _get_client_ip(self, request):
-        """Extract client IP, considering X-Forwarded-For for proxies."""
         x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
         if x_forwarded_for:
             return x_forwarded_for.split(',')[0].strip()

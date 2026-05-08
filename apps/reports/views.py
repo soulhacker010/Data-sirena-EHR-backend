@@ -106,11 +106,14 @@ class SessionSummaryView(APIView):
 
         # CSV export
         if request.query_params.get('format') == 'csv':
-            return self._csv_response(provider_breakdown, 'session_summary')
+            return self._csv_response(provider_breakdown, 'session_summary', request=request)
 
         return Response(result)
 
-    def _csv_response(self, data, filename):
+    def _csv_response(self, data, filename, request=None):
+        from apps.audit.utils import write_audit
+        if request:
+            write_audit(request, 'export', 'reports', changes={'report': filename, 'rows': len(data)})
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
         if data:
@@ -333,11 +336,14 @@ class AuthorizationReportView(APIView):
         ]
 
         if request.query_params.get('format') == 'csv':
-            return self._csv_response(results, 'authorization_report')
+            return self._csv_response(results, 'authorization_report', request=request)
 
         return Response({'authorizations': results})
 
-    def _csv_response(self, data, filename):
+    def _csv_response(self, data, filename, request=None):
+        from apps.audit.utils import write_audit
+        if request:
+            write_audit(request, 'export', 'reports', changes={'report': filename, 'rows': len(data)})
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
         if data:
@@ -395,11 +401,14 @@ class MissingNotesView(APIView):
         ]
 
         if request.query_params.get('format') == 'csv':
-            return self._csv_response(results, 'missing_notes')
+            return self._csv_response(results, 'missing_notes', request=request)
 
         return Response({'missing_notes': results})
 
-    def _csv_response(self, data, filename):
+    def _csv_response(self, data, filename, request=None):
+        from apps.audit.utils import write_audit
+        if request:
+            write_audit(request, 'export', 'reports', changes={'report': filename, 'rows': len(data)})
         response = HttpResponse(content_type='text/csv')
         response['Content-Disposition'] = f'attachment; filename="{filename}.csv"'
         if data:

@@ -149,6 +149,111 @@ class TestNoteList:
 
 
 @pytest.mark.django_db
+class TestNoteAppointmentFilter:
+    """E24: filter by `?appointment=<id>` so the calendar's note-attach flow
+    can find an existing note for an appointment instead of creating a duplicate."""
+    url = '/api/v1/notes/'
+
+    def test_returns_only_notes_for_that_appointment(
+        self, clinician_client, sample_client, sample_appointment, clinician_user,
+    ):
+        from apps.clinical.models import SessionNote
+        # One note tied to the appointment
+        attached = SessionNote.objects.create(
+            client=sample_client, provider=clinician_user,
+            appointment=sample_appointment,
+            status='draft', note_data={'objectives': 'attached'},
+        )
+        # One unrelated note (no appointment)
+        SessionNote.objects.create(
+            client=sample_client, provider=clinician_user,
+            status='draft', note_data={'objectives': 'standalone'},
+        )
+
+        resp = clinician_client.get(f'{self.url}?appointment={sample_appointment.id}')
+        assert resp.status_code == status.HTTP_200_OK
+        ids = {n['id'] for n in resp.data['results']}
+        assert ids == {str(attached.id)}, (
+            f'Expected only the appointment-attached note; got {len(ids)} notes'
+        )
+
+    def test_no_note_for_appointment_returns_empty(
+        self, clinician_client, sample_appointment,
+    ):
+        resp = clinician_client.get(f'{self.url}?appointment={sample_appointment.id}')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['count'] == 0
+
+
+@pytest.mark.django_db
+class TestNoteStatusFilter:
+    """Status filter — including the `pending` pseudo-value used by the
+    dashboard's Pending Notes drill-down (B7 fix). Without `pending`, the
+    dashboard sent users to /notes which showed all statuses including signed.
+    """
+    url = '/api/v1/notes/'
+
+    def _make_note(self, clinician_client, sample_client, *, note_status='draft'):
+        from apps.clinical.models import SessionNote
+        from apps.accounts.models import User
+        # The clinician_client fixture is auth'd as the clinician user.
+        provider = User.objects.get(email='clinician@testclinic.com')
+        return SessionNote.objects.create(
+            client=sample_client,
+            provider=provider,
+            status=note_status,
+            note_data={},
+        )
+
+    def test_pending_returns_drafts_and_completed(self, clinician_client, sample_client):
+        self._make_note(clinician_client, sample_client, note_status='draft')
+        self._make_note(clinician_client, sample_client, note_status='completed')
+        self._make_note(clinician_client, sample_client, note_status='signed')
+
+        resp = clinician_client.get(self.url + '?status=pending')
+        assert resp.status_code == status.HTTP_200_OK
+        statuses = {n['status'] for n in resp.data['results']}
+        assert statuses == {'draft', 'completed'}, (
+            f'pending filter must return only draft+completed; got {statuses}'
+        )
+
+    def test_pending_excludes_signed(self, clinician_client, sample_client):
+        self._make_note(clinician_client, sample_client, note_status='signed')
+
+        resp = clinician_client.get(self.url + '?status=pending')
+        assert resp.status_code == status.HTTP_200_OK
+        assert resp.data['count'] == 0
+
+    def test_pending_excludes_co_signed(self, clinician_client, sample_client):
+        self._make_note(clinician_client, sample_client, note_status='co_signed')
+
+        resp = clinician_client.get(self.url + '?status=pending')
+        assert resp.data['count'] == 0
+
+    def test_exact_status_filters_still_work(self, clinician_client, sample_client):
+        """Removing 'status' from filterset_fields shouldn't break exact-match filters."""
+        self._make_note(clinician_client, sample_client, note_status='draft')
+        self._make_note(clinician_client, sample_client, note_status='signed')
+
+        resp = clinician_client.get(self.url + '?status=signed')
+        assert resp.status_code == status.HTTP_200_OK
+        statuses = {n['status'] for n in resp.data['results']}
+        assert statuses == {'signed'}
+
+        resp = clinician_client.get(self.url + '?status=draft')
+        statuses = {n['status'] for n in resp.data['results']}
+        assert statuses == {'draft'}
+
+    def test_no_status_param_returns_all(self, clinician_client, sample_client):
+        self._make_note(clinician_client, sample_client, note_status='draft')
+        self._make_note(clinician_client, sample_client, note_status='signed')
+
+        resp = clinician_client.get(self.url)
+        statuses = {n['status'] for n in resp.data['results']}
+        assert {'draft', 'signed'}.issubset(statuses)
+
+
+@pytest.mark.django_db
 class TestNoteUpdate:
     url = '/api/v1/notes/'
 

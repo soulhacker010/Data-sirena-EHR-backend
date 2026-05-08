@@ -74,20 +74,24 @@ class TestBillerPermissions:
         resp = biller_client.get('/api/v1/invoices/')
         assert resp.status_code == status.HTTP_200_OK
 
-    def test_biller_cannot_list_clients(self, biller_client):
-        """Biller has no IsFrontDesk permission → 403."""
+    def test_biller_can_list_clients(self, biller_client):
+        """E25: With Dr. Joe's "everyone can schedule" widening of
+        IsFrontDesk, billers also see /clients/ — they need it to associate
+        invoices to patients anyway. Note access is still blocked
+        (IsClinicalStaff)."""
         resp = biller_client.get('/api/v1/clients/')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_biller_cannot_list_notes(self, biller_client):
         """Biller has no IsClinicalStaff permission → 403."""
         resp = biller_client.get('/api/v1/notes/')
         assert resp.status_code == status.HTTP_403_FORBIDDEN
 
-    def test_biller_cannot_list_appointments(self, biller_client):
-        """Biller has no IsFrontDesk permission → 403."""
+    def test_biller_can_list_appointments(self, biller_client):
+        """E25: Dr. Joe asked for everyone-can-schedule. Billers were previously
+        blocked from /appointments/ — now allowed (IsFrontDesk includes biller)."""
         resp = biller_client.get('/api/v1/appointments/')
-        assert resp.status_code == status.HTTP_403_FORBIDDEN
+        assert resp.status_code == status.HTTP_200_OK
 
     def test_biller_cannot_manage_users(self, biller_client):
         """Biller has no IsAdmin permission → 403."""

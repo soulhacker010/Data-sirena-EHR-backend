@@ -52,12 +52,23 @@ class IsBiller(BasePermission):
 
 
 class IsFrontDesk(BasePermission):
-    """Front desk, clinicians, supervisors, and admins."""
+    """
+    Anyone in the practice may access scheduling — admins, supervisors,
+    clinicians, front desk, AND billers.
+
+    E25 (Dr. Joe 2026-05-04 feedback — "Ensure everyone has permission to
+    create appointments etc."): billers were previously excluded but small
+    practices share scheduling duties across roles; honoring the explicit
+    request rather than enforcing a strict role-silo we didn't ship with
+    a workflow rationale.
+    """
     def has_permission(self, request, view):
         return (
             request.user
             and request.user.is_authenticated
-            and request.user.role in ('admin', 'supervisor', 'clinician', 'front_desk')
+            and request.user.role in (
+                'admin', 'supervisor', 'clinician', 'front_desk', 'biller',
+            )
         )
 
 

@@ -90,7 +90,7 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
-            'phone', 'licenses', 'credentials',
+            'phone', 'licenses', 'credentials', 'npi',
             'is_active', 'is_supervisor',
             'organization_id', 'organization_name',
             'last_login', 'created_at', 'updated_at',
@@ -98,7 +98,24 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'last_login', 'created_at', 'updated_at']
 
 
-class UserCreateSerializer(serializers.ModelSerializer):
+class _NPIValidationMixin:
+    """Shared NPI validator. Empty string is allowed (non-clinical roles).
+    When populated, must be 10 digits passing the CMS Luhn check.
+    """
+    def validate_npi(self, value: str) -> str:
+        from apps.accounts.npi import luhn_validate_npi
+        cleaned = (value or '').strip()
+        if not cleaned:
+            return ''
+        if not luhn_validate_npi(cleaned):
+            raise serializers.ValidationError(
+                'Invalid NPI. Must be 10 digits passing the CMS Luhn check '
+                '(prefix 80840). Double-check the number on the NPPES registry.'
+            )
+        return cleaned
+
+
+class UserCreateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
     """For admin creating new users."""
     password = serializers.CharField(write_only=True, min_length=8)
     organization_id = serializers.UUIDField(write_only=True)
@@ -107,7 +124,8 @@ class UserCreateSerializer(serializers.ModelSerializer):
         model = User
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
-            'phone', 'licenses', 'credentials', 'password', 'organization_id',
+            'phone', 'licenses', 'credentials', 'npi',
+            'password', 'organization_id',
         ]
         read_only_fields = ['id']
 
@@ -124,14 +142,32 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return UserSerializer(instance, context=self.context).data
 
 
-class UserUpdateSerializer(serializers.ModelSerializer):
-    """For admin updating existing users."""
+class UserUpdateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
+    """For admin updating existing users.
+
+    Allows email and phone updates (B13). Email uniqueness is enforced at the
+    DB level; we add an explicit serializer-level check that excludes the
+    instance being updated so a no-op save (same email) doesn't trip.
+
+    NPI (E5) is admin-editable and Luhn-validated by the mixin.
+    """
     class Meta:
         model = User
         fields = [
-            'first_name', 'last_name', 'role', 'licenses',
-            'credentials', 'is_active',
+            'first_name', 'last_name', 'email', 'phone', 'role',
+            'licenses', 'credentials', 'npi', 'is_active',
         ]
+
+    def validate_email(self, value: str) -> str:
+        normalized = (value or '').strip().lower()
+        if not normalized:
+            raise serializers.ValidationError('Email cannot be blank.')
+        qs = User.objects.filter(email__iexact=normalized)
+        if self.instance is not None:
+            qs = qs.exclude(pk=self.instance.pk)
+        if qs.exists():
+            raise serializers.ValidationError('A user with this email already exists.')
+        return normalized
 
 
 # ─── NPI / Location Serializers ─────────────────────────────────────────────────

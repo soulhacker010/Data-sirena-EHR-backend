@@ -82,12 +82,40 @@ def generate_837p(claim, *, submitter_id: str = '', test: bool = False) -> str:
 
     sub_id = submitter_id or (getattr(org, 'tax_id', '') or OA_RECEIVER_ID)
     org_name = getattr(org, 'name', 'SIRENA HEALTH') if org else 'SIRENA HEALTH'
-    billing_npi = getattr(org, 'npi', '') or ''
+    # Billing provider NPI: oldest active NPI on the organization. The Organization
+    # model has no `npi` field — NPIs live in the related NPI table (related_name='npis').
+    # Without this lookup the X12 file would be sent with an empty NM1*85 NPI and
+    # rejected by Office Ally / payers.
+    billing_npi = ''
+    if org is not None:
+        active_npi = org.npis.filter(is_active=True).order_by('created_at').first()
+        if active_npi:
+            billing_npi = active_npi.npi_number or ''
     billing_tax_id = getattr(org, 'tax_id', '') or sub_id
-    billing_address = getattr(org, 'address', '') or ''
-    billing_city = getattr(org, 'city', '') or ''
-    billing_state = getattr(org, 'state', '') or ''
-    billing_zip = (getattr(org, 'zip_code', '') or '').replace('-', '')
+
+    # Billing provider address comes from the org's primary Location. Organization
+    # itself only has a single free-text `address` field (no city/state/zip split),
+    # which is why earlier code that read org.city/state/zip always sent empty N4
+    # segments — invalid per X12 005010X222A1.
+    primary_location = None
+    if org is not None:
+        primary_location = org.locations.filter(
+            is_primary=True, is_active=True,
+        ).first()
+
+    if primary_location is not None:
+        billing_address = primary_location.address or ''
+        billing_city = primary_location.city or ''
+        billing_state = primary_location.state or ''
+        billing_zip = (primary_location.zip_code or '').replace('-', '')
+    else:
+        # Last-resort fallback: org has a single free-text address but no parsed
+        # city/state/zip, so partial population is unavoidable here. The validator
+        # in claim_validator.py flags this case as an error before submission.
+        billing_address = (getattr(org, 'address', '') or '')
+        billing_city = ''
+        billing_state = ''
+        billing_zip = ''
 
     usage = 'T' if test else 'P'
 
@@ -124,14 +152,24 @@ def generate_837p(claim, *, submitter_id: str = '', test: bool = False) -> str:
     segments.append(_seg('HL', str(hl_counter), '', '20', '1'))
 
     # ── Loop 2010AA — Billing Provider ───────────────────────────────────────
+    # E5 fix: the billing provider is the PRACTICE (Type 2 NPI), not the
+    # individual clinician. Use the org's NPI here regardless of who actually
+    # rendered the service. The clinician's individual (Type 1) NPI goes on
+    # Loop 2310B (Rendering Provider) below.
     provider = getattr(claim, 'rendering_provider', None) or (
         invoice.items.first().appointment.provider if invoice.items.exists() and invoice.items.first().appointment else None
     )
     prov_first = getattr(provider, 'first_name', '') or ''
     prov_last = getattr(provider, 'last_name', '') or org_name
-    prov_npi = getattr(provider, 'npi', '') or billing_npi or ''
+    # Rendering provider's individual NPI — falls back to billing_npi (org)
+    # for solo practices that haven't set provider-level NPIs yet.
+    rendering_npi = getattr(provider, 'npi', '') or billing_npi or ''
 
-    segments.append(_seg('NM1', '85', '1' if prov_first else '2', prov_last[:35], prov_first[:35], '', '', '', 'XX', prov_npi))
+    # Billing Provider segment — name = org, NPI = org NPI. Type qualifier 2 =
+    # non-person entity (the practice).
+    segments.append(_seg(
+        'NM1', '85', '2', org_name[:35], '', '', '', '', 'XX', billing_npi,
+    ))
     if billing_address:
         segments.append(_seg('N3', billing_address[:55]))
         segments.append(_seg('N4', billing_city[:30], billing_state[:2], billing_zip[:15]))
@@ -167,12 +205,21 @@ def generate_837p(claim, *, submitter_id: str = '', test: bool = False) -> str:
     acct_num = str(claim.id)[:20]
     total_charge = _money(claim.billed_amount)
 
-    # Place of service: default 11 (office), 02 for telehealth
+    # Pull invoice line items once — needed for POS, DOS, service facility, and
+    # the per-line Loop 2400 below. select_related on appointment avoids N+1.
+    items = list(invoice.items.select_related('appointment').all())
+
+    # Place of service: pulled from the (first) appointment on this claim.
+    # POS 11 = Office (default), 02 = Telehealth, 12 = Home, etc. The
+    # appointment carries this so it stays consistent with what was scheduled.
     pos_code = '11'
+    if items and items[0].appointment:
+        appt_pos = getattr(items[0].appointment, 'place_of_service', '') or ''
+        if appt_pos:
+            pos_code = appt_pos
 
     # Date of service — from first invoice item's appointment
     dos = ''
-    items = list(invoice.items.select_related('appointment').all())
     if items and items[0].appointment:
         dos = _date(items[0].appointment.start_time)
     if not dos:
@@ -204,8 +251,40 @@ def generate_837p(claim, *, submitter_id: str = '', test: bool = False) -> str:
         segments.append(_seg('REF', 'G1', auth_num))
 
     # ── Loop 2310B — Rendering Provider (if we have NPI) ─────────────────────
-    if prov_npi:
-        segments.append(_seg('NM1', '82', '1', prov_last[:60], prov_first[:35], '', '', '', 'XX', prov_npi))
+    # Uses the clinician's individual NPI (User.npi). Falls back to the org
+    # NPI for solo practices where provider NPI hasn't been set — that's not
+    # ideal but matches the historical behavior and avoids a missing segment.
+    if rendering_npi:
+        segments.append(_seg('NM1', '82', '1', prov_last[:60], prov_first[:35], '', '', '', 'XX', rendering_npi))
+
+    # ── Loop 2310C — Service Facility Location ───────────────────────────────
+    # Required per 005010X222A1 when the place of service is different from the
+    # billing provider's address (which is BSBH's case — sessions happen at
+    # Cedar Grove / Paramus / etc., billing routes through Franklin Lakes).
+    # Source: appointment.location on the first invoice line item with one set.
+    service_location = None
+    for itm in items:
+        appt = getattr(itm, 'appointment', None)
+        loc = getattr(appt, 'location', None) if appt else None
+        if loc is not None:
+            service_location = loc
+            break
+
+    if service_location is not None and (
+        primary_location is None or service_location.pk != primary_location.pk
+    ):
+        sf_name = (service_location.name or '')[:35]
+        sf_zip = (service_location.zip_code or '').replace('-', '')
+        # NM1*77 = Service Facility Location identification
+        segments.append(_seg('NM1', '77', '2', sf_name, '', '', '', '', '', ''))
+        if service_location.address:
+            segments.append(_seg('N3', service_location.address[:55]))
+            segments.append(_seg(
+                'N4',
+                (service_location.city or '')[:30],
+                (service_location.state or '')[:2],
+                sf_zip[:15],
+            ))
 
     # ── Loop 2400 — Service Lines ─────────────────────────────────────────────
     line_num = 0

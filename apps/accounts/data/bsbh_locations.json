@@ -1,0 +1,82 @@
+{
+  "_comment": "Baker Street Behavioral Health office locations. Source: Theranest export (2026-05-04). Used by `python manage.py seed_locations`.",
+  "organization": {
+    "tax_id": "83-2541331",
+    "name": "Baker Street Behavioral Health"
+  },
+  "locations": [
+    {
+      "name": "Franklin Lakes",
+      "address": "851 Franklin Lake Road, Suite 204",
+      "city": "Franklin Lakes",
+      "state": "NJ",
+      "zip_code": "07417-2267",
+      "is_telehealth": false,
+      "is_active": true,
+      "is_primary": true
+    },
+    {
+      "name": "Paramus",
+      "address": "12 Madison Ave, Suite 306",
+      "city": "Paramus",
+      "state": "NJ",
+      "zip_code": "07652-5741",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "Cedar Grove",
+      "address": "874 Pompton Ave, Unit B1",
+      "city": "Cedar Grove",
+      "state": "NJ",
+      "zip_code": "07009-1264",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "Fair Lawn",
+      "address": "15-01 Broadway, Suite 30A",
+      "city": "Fair Lawn",
+      "state": "NJ",
+      "zip_code": "07410-6003",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "Morristown",
+      "address": "10 Pine Street",
+      "city": "Morristown",
+      "state": "NJ",
+      "zip_code": "07960-4167",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "Flemington",
+      "address": "466 State Route 12",
+      "city": "Flemington",
+      "state": "NJ",
+      "zip_code": "08822-4107",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "The Dwelling Place at Saint Clare's",
+      "address": "400 W Blackwell Street",
+      "city": "Dover",
+      "state": "NJ",
+      "zip_code": "07801-2525",
+      "is_telehealth": false,
+      "is_active": true
+    },
+    {
+      "name": "Red Bank",
+      "address": "225 Highway 35, Suite 206",
+      "city": "Red Bank",
+      "state": "NJ",
+      "zip_code": "07701-5919",
+      "is_telehealth": false,
+      "is_active": true
+    }
+  ]
+}

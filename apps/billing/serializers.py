@@ -11,7 +11,7 @@ from decimal import Decimal
 
 from django.db import transaction
 from rest_framework import serializers
-from .models import Invoice, InvoiceItem, Payment, Claim
+from .models import Invoice, InvoiceItem, Payment, Claim, Payer
 from .service_catalog import get_service_description
 
 
@@ -218,12 +218,13 @@ class ClaimSerializer(serializers.ModelSerializer):
     service_code = serializers.SerializerMethodField()
     session_date = serializers.SerializerMethodField()
     remaining_balance = serializers.ReadOnlyField()
+    payer_recognized = serializers.SerializerMethodField()
 
     class Meta:
         model = Claim
         fields = [
             'id', 'invoice_id', 'client_id', 'claim_number',
-            'payer_name', 'payer_id', 'status',
+            'payer_name', 'payer_id', 'payer_recognized', 'status',
             'billed_amount', 'allowed_amount',
             'insurance_paid', 'patient_responsibility', 'write_off_amount',
             'remaining_balance',
@@ -233,6 +234,28 @@ class ClaimSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at',
         ]
         read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_payer_recognized(self, obj):
+        """True if the claim's payer_id maps to an OA-directory Payer that accepts 837P."""
+        if not obj.payer_id:
+            return False
+
+        # Cache the set of recognized payer_ids on the serializer context
+        # so list views don't do N+1 queries.
+        cache = self.context.get('_recognized_payer_ids')
+        if cache is None:
+            parent = getattr(self, 'parent', None)
+            payer_ids = set()
+            if parent is not None and hasattr(parent, 'instance') and parent.instance is not None:
+                payer_ids = {c.payer_id for c in parent.instance if c.payer_id}
+            if not payer_ids:
+                payer_ids = {obj.payer_id}
+            cache = set(Payer.objects.filter(
+                payer_id__in=payer_ids, supports_837p=True,
+            ).values_list('payer_id', flat=True))
+            self.context['_recognized_payer_ids'] = cache
+
+        return obj.payer_id in cache
 
     def get_service_code(self, obj):
         """Pull service_code from the first invoice item if available."""
@@ -307,6 +330,20 @@ class WriteOffSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=10, decimal_places=2)
     reason = serializers.CharField()
     notes = serializers.CharField(required=False, default='')
+
+
+class PayerSerializer(serializers.ModelSerializer):
+    """Office Ally payer directory lookup — used by billing form for autocomplete."""
+
+    class Meta:
+        model = Payer
+        fields = [
+            'id', 'name', 'payer_id', 'transaction_type',
+            'available', 'enrollment_required',
+            'supports_837p', 'supports_eligibility', 'supports_era',
+            'notes',
+        ]
+        read_only_fields = fields
 
 
 class BatchInvoiceSerializer(serializers.Serializer):

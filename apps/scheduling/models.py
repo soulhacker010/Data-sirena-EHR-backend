@@ -26,10 +26,33 @@ class Appointment(OrganizationModel):
         ('no_show', 'No Show'),
     ]
 
+    # E31 Half A: client is now optional. Non-session events (staff meeting,
+    # personal block, training) won't carry a client. The DB CheckConstraint
+    # below enforces "client_session implies client present; everything else
+    # implies client absent" so we can't drift into ambiguous rows.
     client = models.ForeignKey(
         'clients.Client',
         on_delete=models.PROTECT,  # FIX CD-1: Prevent accidental loss of scheduling records
+        null=True, blank=True,
         related_name='appointments',
+    )
+
+    EVENT_TYPE_CHOICES = [
+        ('client_session', 'Client Session'),
+        ('staff_meeting', 'Staff Meeting'),
+        ('personal_block', 'Personal Block'),
+        ('training', 'Training / CEU'),
+        ('other', 'Other'),
+    ]
+    event_type = models.CharField(
+        max_length=32,
+        choices=EVENT_TYPE_CHOICES,
+        default='client_session',
+        help_text='client_session is the only billable type. Others are calendar blocks only.',
+    )
+    title = models.CharField(
+        max_length=255, blank=True, default='',
+        help_text='Title shown for non-session events. Ignored for client sessions (client name is used).',
     )
     provider = models.ForeignKey(
         'accounts.User',
@@ -81,9 +104,26 @@ class Appointment(OrganizationModel):
             models.Index(fields=['client']),
             models.Index(fields=['provider']),
             models.Index(fields=['service_code']),
+            models.Index(fields=['event_type']),
+        ]
+        constraints = [
+            # E31 Half A: a row is either (client_session AND client set) OR
+            # (any other type AND client null). Keeps the data clean so a
+            # billing query can trust `event_type='client_session'` to imply
+            # a client is present, and a non-session row never accidentally
+            # gets a client attached and pulled into invoice generation.
+            models.CheckConstraint(
+                name='appointment_client_matches_event_type',
+                check=(
+                    models.Q(event_type='client_session', client__isnull=False)
+                    | (~models.Q(event_type='client_session') & models.Q(client__isnull=True))
+                ),
+            ),
         ]
 
     def __str__(self):
+        if self.event_type != 'client_session':
+            return f'{self.title or self.get_event_type_display()} — {self.provider} @ {self.start_time:%Y-%m-%d %H:%M}'
         return f"{self.client} — {self.provider} @ {self.start_time.strftime('%Y-%m-%d %H:%M')}"
 
     @property

@@ -59,6 +59,17 @@ class User(AbstractBaseUser, PermissionsMixin):
     )
     phone = models.CharField(max_length=50, blank=True, default='')
     credentials = models.CharField(max_length=255, blank=True, default='')
+    # E5: provider's individual (Type 1) NPI — distinct from the
+    # organization's Type 2 NPI in the NPI table. This is the rendering
+    # provider NPI that goes on Loop 2310B of an 837P claim. Validated
+    # with the CMS Luhn check at the serializer layer when set; blank is
+    # allowed for non-clinical roles (front desk, biller).
+    npi = models.CharField(
+        max_length=10,
+        blank=True,
+        default='',
+        help_text='Individual (Type 1) NPI — 10 digits, Luhn-validated.',
+    )
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     last_login = models.DateTimeField(null=True, blank=True)
@@ -118,9 +129,22 @@ class Location(BaseModel):
     zip_code = models.CharField(max_length=10, blank=True, default='')
     is_telehealth = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
+    is_primary = models.BooleanField(
+        default=False,
+        help_text='Primary billing location for the organization. '
+                  'Used as the Billing Provider address on claims and PDFs.',
+    )
 
     class Meta(BaseModel.Meta):
         ordering = ['name']
+        constraints = [
+            # At most one primary location per organization, enforced in the DB.
+            models.UniqueConstraint(
+                fields=['organization'],
+                condition=models.Q(is_primary=True),
+                name='accounts_location_one_primary_per_org',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.name} ({'Telehealth' if self.is_telehealth else self.city})"

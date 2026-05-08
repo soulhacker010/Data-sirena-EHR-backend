@@ -55,6 +55,54 @@ class TestIntakeList:
         assert 'results' in resp.data
         assert resp.data['count'] >= 1
 
+    # ─── B10: date-range filter for the calendar overlay ───────────────────
+
+    def _make_intake(self, clinician_client, sample_client, assessment_date):
+        return clinician_client.post(self.url, {
+            'client_id': str(sample_client.id),
+            'assessment_date': assessment_date,
+            'intake_data': {'presenting_problem': 'Test'},
+        }, format='json')
+
+    def test_filter_by_start_date_inclusive(self, clinician_client, sample_client):
+        """assessment_date == start_date is included."""
+        self._make_intake(clinician_client, sample_client, '2026-04-05')
+        self._make_intake(clinician_client, sample_client, '2026-03-15')
+
+        resp = clinician_client.get(self.url + '?start_date=2026-04-01')
+        assert resp.status_code == status.HTTP_200_OK
+        dates = {i['assessment_date'] for i in resp.data['results']}
+        assert dates == {'2026-04-05'}
+
+    def test_filter_by_end_date_inclusive(self, clinician_client, sample_client):
+        """assessment_date == end_date is included."""
+        self._make_intake(clinician_client, sample_client, '2026-04-05')
+        self._make_intake(clinician_client, sample_client, '2026-05-15')
+
+        resp = clinician_client.get(self.url + '?end_date=2026-04-30')
+        dates = {i['assessment_date'] for i in resp.data['results']}
+        assert dates == {'2026-04-05'}
+
+    def test_filter_by_full_date_range(self, clinician_client, sample_client):
+        """Both bounds together return only intakes inside the window."""
+        self._make_intake(clinician_client, sample_client, '2026-03-15')
+        self._make_intake(clinician_client, sample_client, '2026-04-05')
+        self._make_intake(clinician_client, sample_client, '2026-04-20')
+        self._make_intake(clinician_client, sample_client, '2026-05-10')
+
+        resp = clinician_client.get(
+            self.url + '?start_date=2026-04-01&end_date=2026-04-30'
+        )
+        dates = {i['assessment_date'] for i in resp.data['results']}
+        assert dates == {'2026-04-05', '2026-04-20'}
+
+    def test_no_date_filter_returns_all(self, clinician_client, sample_client):
+        self._make_intake(clinician_client, sample_client, '2026-03-15')
+        self._make_intake(clinician_client, sample_client, '2026-04-05')
+
+        resp = clinician_client.get(self.url)
+        assert resp.data['count'] >= 2
+
 
 @pytest.mark.django_db
 class TestIntakeUpdate:

@@ -14,7 +14,10 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Q
 
 from apps.core.permissions import IsClinicalStaff
-from .models import NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment, Document
+from .models import (
+    NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment,
+    Document, Addendum, ContactNote,
+)
 from .serializers import (
     NoteTemplateSerializer,
     SessionNoteSerializer,
@@ -29,8 +32,59 @@ from .serializers import (
     TreatmentPlanWriteSerializer,
     TreatmentPlanListSerializer,
     DocumentSerializer,
+    AddendumSerializer,
+    AddendumWriteSerializer,
+    ContactNoteSerializer,
+    ContactNoteWriteSerializer,
 )
 from .services import NoteSigningService, DocumentStorageService
+
+
+class AddendumActionMixin:
+    """
+    Adds a nested `addendums` action to any parent ViewSet.
+
+    Subclasses set ``addendum_parent_field`` to one of:
+      - 'parent_session_note'
+      - 'parent_intake'
+      - 'parent_treatment_plan'
+
+    GET   /<parent>/{id}/addendums/  → list, oldest first
+    POST  /<parent>/{id}/addendums/  → create (body required); 201 with addendum
+
+    Addendums are immutable after creation — there is no update or delete
+    action on purpose. To "correct" an addendum, write another one.
+    """
+    addendum_parent_field: str = ''
+
+    @action(detail=True, methods=['get', 'post'], url_path='addendums')
+    def addendums(self, request, pk=None):
+        parent = self.get_object()
+        if not self.addendum_parent_field:
+            raise NotImplementedError(
+                'Subclass must set `addendum_parent_field` on the ViewSet.'
+            )
+
+        if request.method == 'GET':
+            qs = Addendum.objects.filter(
+                **{self.addendum_parent_field: parent}
+            ).select_related('created_by').order_by('created_at')
+            return Response(AddendumSerializer(qs, many=True).data)
+
+        # POST — create. Body is the only writable field; author = request.user;
+        # parent comes from the URL via self.get_object() (already org-scoped
+        # because each parent viewset's get_queryset filters by organization).
+        write = AddendumWriteSerializer(data=request.data)
+        write.is_valid(raise_exception=True)
+        addendum = Addendum.objects.create(
+            body=write.validated_data['body'],
+            created_by=request.user,
+            **{self.addendum_parent_field: parent},
+        )
+        return Response(
+            AddendumSerializer(addendum).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class NoteTemplateViewSet(viewsets.ModelViewSet):
@@ -55,7 +109,7 @@ class NoteTemplateViewSet(viewsets.ModelViewSet):
         )
 
 
-class SessionNoteViewSet(viewsets.ModelViewSet):
+class SessionNoteViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     Session note CRUD with sign/co-sign actions.
 
@@ -66,9 +120,17 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
     DELETE /api/v1/notes/{id}/           → delete (if draft only)
     POST   /api/v1/notes/{id}/sign/      → sign note
     POST   /api/v1/notes/{id}/co-sign/   → co-sign note (supervisor)
+    GET/POST /api/v1/notes/{id}/addendums/ → list/add addendums (E18)
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
-    filterset_fields = ['client', 'provider', 'status']
+    addendum_parent_field = 'parent_session_note'
+    # `status` is intentionally NOT in filterset_fields — we handle it in
+    # get_queryset so we can support the dashboard's `?status=pending` pseudo-
+    # value (draft+completed) alongside the normal exact-match values.
+    # `appointment` is in filterset_fields (E24): the calendar's "Write Note"
+    # flow uses ?appointment=<id> to find an existing note for an appointment
+    # so we can redirect the provider to it instead of creating a duplicate.
+    filterset_fields = ['client', 'provider', 'appointment']
     search_fields = ['client__first_name', 'client__last_name']
     ordering_fields = ['created_at', 'signed_at']
 
@@ -101,6 +163,17 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
                 | Q(note_data__service_code=service_code)
             )
 
+        # Status filter — `pending` is a pseudo-value meaning "still needs
+        # attention" (draft + completed), used by the dashboard's Pending Notes
+        # drill-down. Without this, the dashboard click ended up at /notes
+        # showing ALL statuses including signed ones — Dr. Joe's reported bug.
+        # Other values (draft, completed, signed, co_signed) are exact matches.
+        status_param = self.request.query_params.get('status')
+        if status_param == 'pending':
+            qs = qs.filter(status__in=['draft', 'completed'])
+        elif status_param:
+            qs = qs.filter(status=status_param)
+
         return qs
 
     def get_serializer_class(self):
@@ -121,7 +194,22 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
                 raise ValidationError({
                     'client_id': 'Client does not belong to your organization.'
                 })
-        serializer.save(provider=self.request.user)
+        note = serializer.save(provider=self.request.user)
+
+        # Audit: if this note was created from an appointment, log session_start.
+        # (A free-standing note has no appointment_id — we only track sessions
+        # that began from a scheduled appointment.)
+        if note.appointment_id:
+            try:
+                from apps.audit.utils import write_audit
+                write_audit(self.request, 'session_start', 'notes', record_id=str(note.id), changes={
+                    'appointment_id': str(note.appointment_id),
+                    'client_id': str(note.client_id),
+                    'client_name': f'{note.client.first_name} {note.client.last_name}',
+                    'provider': f'{self.request.user.first_name} {self.request.user.last_name}',
+                })
+            except Exception:
+                pass
 
     def perform_update(self, serializer):
         note = self.get_object()
@@ -149,6 +237,12 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
                 serializer.validated_data['signature_data'],
                 request.user,
             )
+            from apps.audit.utils import write_audit
+            write_audit(request, 'sign', 'notes', record_id=str(note.id), changes={
+                'client_id': str(note.client_id),
+                'client_name': f'{note.client.first_name} {note.client.last_name}',
+                'signed_by': f'{request.user.first_name} {request.user.last_name}',
+            })
             return Response(SessionNoteSerializer(note).data)
         except ValueError as e:
             return Response(
@@ -189,6 +283,12 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
                     serializer.validated_data['supervisor_signature'],
                     request.user,
                 )
+            from apps.audit.utils import write_audit
+            write_audit(request, 'co_sign', 'notes', record_id=str(note.id), changes={
+                'client_id': str(note.client_id),
+                'client_name': f'{note.client.first_name} {note.client.last_name}',
+                'co_signed_by': f'{request.user.first_name} {request.user.last_name}',
+            })
             return Response(SessionNoteSerializer(note).data)
         except ValueError as e:
             return Response(
@@ -233,7 +333,7 @@ class SessionNoteViewSet(viewsets.ModelViewSet):
         return Response(SessionNoteSerializer(note).data)
 
 
-class TreatmentPlanViewSet(viewsets.ModelViewSet):
+class TreatmentPlanViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     Treatment Plan CRUD with sign, copy, and intake-pull actions (BUILD 4).
 
@@ -246,8 +346,10 @@ class TreatmentPlanViewSet(viewsets.ModelViewSet):
     POST   /api/v1/treatment-plans/{id}/co-sign/           → co-sign plan
     GET    /api/v1/treatment-plans/copy-from-previous/     → copy from previous
     GET    /api/v1/treatment-plans/pull-intake-strengths/   → pull from intake
+    GET/POST /api/v1/treatment-plans/{id}/addendums/        → list/add addendums (E18)
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
+    addendum_parent_field = 'parent_treatment_plan'
     filterset_fields = ['client', 'is_active', 'status']
 
     def get_queryset(self):
@@ -391,7 +493,7 @@ class TreatmentPlanViewSet(viewsets.ModelViewSet):
         })
 
 
-class IntakeAssessmentViewSet(viewsets.ModelViewSet):
+class IntakeAssessmentViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     Intake/Initial Assessment CRUD with sign/co-sign actions (BUILD 3).
 
@@ -401,14 +503,29 @@ class IntakeAssessmentViewSet(viewsets.ModelViewSet):
     PUT    /api/v1/intakes/{id}/      → update
     DELETE /api/v1/intakes/{id}/      → delete (draft only)
     POST   /api/v1/intakes/{id}/sign/ → sign intake
+    GET/POST /api/v1/intakes/{id}/addendums/ → list/add addendums (E11/E18)
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
+    addendum_parent_field = 'parent_intake'
     filterset_fields = ['client', 'provider', 'status']
 
     def get_queryset(self):
-        return IntakeAssessment.objects.filter(
+        qs = IntakeAssessment.objects.filter(
             client__organization=self.request.user.organization
         ).select_related('client', 'provider', 'co_signed_by')
+
+        # Date-range filter on `assessment_date` so the calendar can fetch
+        # intakes alongside appointments (B10 — Dr. Joe's signed intakes were
+        # not visible on the calendar because there was no way to pull them
+        # by date window). Both bounds inclusive on the date the user picked.
+        start_date = self.request.query_params.get('start_date')
+        end_date = self.request.query_params.get('end_date')
+        if start_date:
+            qs = qs.filter(assessment_date__gte=start_date)
+        if end_date:
+            qs = qs.filter(assessment_date__lte=end_date)
+
+        return qs
 
     def get_serializer_class(self):
         if self.action == 'list':
@@ -564,4 +681,80 @@ class DocumentViewSet(viewsets.ModelViewSet):
             instance,
             as_attachment=download,
         )
+        from apps.audit.utils import write_audit
+        write_audit(request, 'document_download' if download else 'document_access', 'documents',
+                    record_id=str(instance.id), changes={
+                        'file_name': instance.file_name,
+                        'client_id': str(instance.client_id),
+                        'download': download,
+                    })
         return Response({'url': access_url})
+
+
+class ContactNoteViewSet(viewsets.ModelViewSet):
+    """
+    Non-billable client contact log (E19).
+
+    GET    /api/v1/contact-notes/?client={id}  → list (filterable by client)
+    POST   /api/v1/contact-notes/              → create
+    GET    /api/v1/contact-notes/{id}/         → detail
+    PUT    /api/v1/contact-notes/{id}/         → update (only the author)
+    DELETE /api/v1/contact-notes/{id}/         → delete (only the author or admin)
+
+    Scoping rules:
+      - All requests are org-scoped via the client's organization.
+      - Clinicians see only contacts they authored. Admins/supervisors see
+        all contacts in the org.
+    """
+    permission_classes = [IsAuthenticated, IsClinicalStaff]
+    filterset_fields = ['client', 'provider', 'contact_type']
+    ordering_fields = ['contact_date', 'created_at']
+    ordering = ['-contact_date']
+
+    def get_queryset(self):
+        qs = ContactNote.objects.select_related('client', 'provider').filter(
+            client__organization=self.request.user.organization,
+        )
+        if self.request.user.role == 'clinician':
+            qs = qs.filter(provider=self.request.user)
+        return qs
+
+    def get_serializer_class(self):
+        if self.action in ('create', 'update', 'partial_update'):
+            return ContactNoteWriteSerializer
+        return ContactNoteSerializer
+
+    def perform_create(self, serializer):
+        # Validate the client belongs to the user's org before saving — same
+        # pattern as SessionNoteViewSet.perform_create.
+        from apps.clients.models import Client
+        client_id = serializer.validated_data.get('client_id')
+        if client_id:
+            org = self.request.user.organization
+            if not Client.objects.filter(id=client_id, organization=org).exists():
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    'client_id': 'Client does not belong to your organization.',
+                })
+        serializer.save(provider=self.request.user)
+
+    def perform_update(self, serializer):
+        # Only the author may edit a contact note. Admins can fix authorship
+        # mistakes via the Django admin or a dedicated endpoint, not casually
+        # through this one.
+        instance = self.get_object()
+        if instance.provider_id != self.request.user.id:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Only the author can edit this contact note.')
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if (
+            instance.provider_id != self.request.user.id
+            and self.request.user.role not in ('admin', 'supervisor')
+        ):
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied(
+                'Only the author or an admin can delete a contact note.',
+            )
+        instance.delete()

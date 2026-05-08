@@ -62,6 +62,19 @@ class ClientViewSet(viewsets.ModelViewSet):
             return ClientDetailSerializer
         return ClientSerializer
 
+    def retrieve(self, request, *args, **kwargs):
+        """Log PHI access every time a client record is opened."""
+        response = super().retrieve(request, *args, **kwargs)
+        try:
+            from apps.audit.utils import write_audit
+            client = self.get_object()
+            write_audit(request, 'phi_access', 'clients', record_id=str(client.id), changes={
+                'client_name': f'{client.first_name} {client.last_name}',
+            })
+        except Exception:
+            pass
+        return response
+
     def perform_create(self, serializer):
         """Auto-set organization from the authenticated user."""
         serializer.save(organization=self.request.user.organization)

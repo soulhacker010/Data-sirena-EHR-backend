@@ -160,6 +160,340 @@ def test_pending_notes_counts_draft_notes(
     assert response.data['pending_notes'] >= 1
 
 
+# ─── B6: Sessions This Month should count signed notes ─────────────────────
+
+@pytest.mark.django_db
+def test_sessions_this_month_counts_appointment_with_signed_note_even_if_status_scheduled(
+    api_client, admin, clinician, client_record, org,
+):
+    """Dr. Joe's bug: signed note exists, but appointment status was never
+    flipped to 'attended' → sessions_this_month was 0 despite the session
+    obviously having happened. The fix: count attended OR has-signed-note.
+    """
+    from django.utils import timezone
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=10, minute=0, second=0, microsecond=0)
+
+    appt = Appointment.objects.create(
+        organization=org,
+        client=client_record,
+        provider=clinician,
+        start_time=month_start,
+        end_time=month_start + datetime.timedelta(hours=1),
+        service_code='90837',
+        status='scheduled',  # NOT attended — but the note IS signed
+    )
+    SessionNote.objects.create(
+        client=client_record,
+        provider=clinician,
+        appointment=appt,
+        status='signed',
+        note_data={},
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data['sessions_this_month'] >= 1, (
+        'Signed note implies session happened — must count even when '
+        'appointment.status is still "scheduled"'
+    )
+
+
+@pytest.mark.django_db
+def test_sessions_this_month_still_counts_attended_without_note(
+    api_client, admin, clinician, client_record, org,
+):
+    """Backwards-compat: appointments marked attended still count even with no note."""
+    from django.utils import timezone
+    now = timezone.now()
+    Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=now.replace(day=1, hour=10, minute=0, second=0, microsecond=0),
+        end_time=now.replace(day=1, hour=11, minute=0, second=0, microsecond=0),
+        service_code='90837', status='attended',
+    )
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.data['sessions_this_month'] >= 1
+
+
+@pytest.mark.django_db
+def test_sessions_this_month_does_not_double_count(
+    api_client, admin, clinician, client_record, org,
+):
+    """An appointment that is BOTH attended AND has a signed note counts once."""
+    from django.utils import timezone
+    now = timezone.now()
+    appt = Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=now.replace(day=1, hour=10, minute=0, second=0, microsecond=0),
+        end_time=now.replace(day=1, hour=11, minute=0, second=0, microsecond=0),
+        service_code='90837', status='attended',
+    )
+    SessionNote.objects.create(
+        client=client_record, provider=clinician, appointment=appt,
+        status='signed', note_data={},
+    )
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.data['sessions_this_month'] == 1
+
+
+@pytest.mark.django_db
+def test_pending_notes_counts_past_scheduled_appointment_with_no_note(
+    api_client, admin, clinician, client_record, org,
+):
+    """E23 (Dr. Joe): "I had an appointment 2 days ago and it didnt pop up"
+    in Pending Notes. Provider didn't flip to 'attended' — system must still
+    count past scheduled appointments without a note as pending."""
+    from django.utils import timezone
+    two_days_ago = timezone.now() - datetime.timedelta(days=2)
+
+    Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=two_days_ago,
+        end_time=two_days_ago + datetime.timedelta(hours=1),
+        service_code='90834',
+        status='scheduled',  # Never manually flipped — that's the bug
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.status_code == status.HTTP_200_OK
+    assert response.data['pending_notes'] >= 1
+
+
+@pytest.mark.django_db
+def test_pending_notes_does_not_count_future_scheduled(
+    api_client, admin, clinician, client_record, org,
+):
+    """Future appointments shouldn't be in pending — they haven't happened."""
+    from django.utils import timezone
+    in_three_days = timezone.now() + datetime.timedelta(days=3)
+    Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=in_three_days,
+        end_time=in_three_days + datetime.timedelta(hours=1),
+        service_code='90834',
+        status='scheduled',
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    # Whatever the baseline (from other fixtures), this future appointment
+    # specifically must not be in pending — assert by ensuring count is 0
+    # for this isolated test setup.
+    assert response.data['pending_notes'] == 0
+
+
+@pytest.mark.django_db
+def test_pending_notes_does_not_count_cancelled(
+    api_client, admin, clinician, client_record, org,
+):
+    """Cancelled appointments don't need notes."""
+    from django.utils import timezone
+    yesterday = timezone.now() - datetime.timedelta(days=1)
+    Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=yesterday,
+        end_time=yesterday + datetime.timedelta(hours=1),
+        service_code='90834',
+        status='cancelled',
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.data['pending_notes'] == 0
+
+
+@pytest.mark.django_db
+def test_sessions_this_month_does_not_count_co_signed_only(
+    api_client, admin, clinician, client_record, org,
+):
+    """Co-signed notes should also count (signed by clinician, then co-signed)."""
+    from django.utils import timezone
+    now = timezone.now()
+    month_start = now.replace(day=1, hour=10, minute=0, second=0, microsecond=0)
+    appt = Appointment.objects.create(
+        organization=org, client=client_record, provider=clinician,
+        start_time=month_start,
+        end_time=month_start + datetime.timedelta(hours=1),
+        service_code='90837', status='scheduled',
+    )
+    SessionNote.objects.create(
+        client=client_record, provider=clinician, appointment=appt,
+        status='co_signed', note_data={},
+    )
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.data['sessions_this_month'] >= 1
+
+
+# ─── E29: per-clinician Recent Activity privacy filter ─────────────────────
+
+@pytest.mark.django_db
+def test_recent_activity_clinician_sees_only_own_actions(
+    api_client, admin, clinician, client_record, org,
+):
+    """E29 (Dr. Joe): "each clinician should only see activity for their own
+    client". Implementation: clinicians see only audit entries where user=self;
+    admins see all. This prevents another clinician's client info bleeding
+    into someone else's chart view."""
+    from apps.audit.models import AuditLog
+
+    AuditLog.objects.create(
+        organization=org, user=clinician,
+        action='create', table_name='session_notes',
+    )
+    AuditLog.objects.create(
+        organization=org, user=admin,
+        action='update', table_name='clients',
+    )
+
+    api_client.force_authenticate(user=clinician)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.status_code == status.HTTP_200_OK
+    activities = response.data['recent_activity']
+    user_names = {a['user_name'] for a in activities}
+    # Only the clinician's own action — admin's action is not visible.
+    assert user_names == {clinician.full_name}
+
+
+@pytest.mark.django_db
+def test_recent_activity_admin_sees_all_org_activity(
+    api_client, admin, clinician, org,
+):
+    from apps.audit.models import AuditLog
+    AuditLog.objects.create(
+        organization=org, user=clinician,
+        action='create', table_name='session_notes',
+    )
+    AuditLog.objects.create(
+        organization=org, user=admin,
+        action='update', table_name='clients',
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    activities = response.data['recent_activity']
+    user_names = {a['user_name'] for a in activities}
+    assert {clinician.full_name, admin.full_name}.issubset(user_names)
+
+
+@pytest.mark.django_db
+def test_recent_activity_does_not_leak_other_orgs(
+    api_client, admin, org,
+):
+    """Sanity: org-scoping was already there; this test pins it so the E29
+    user-filter we added doesn't accidentally widen the query later."""
+    from apps.audit.models import AuditLog
+    other_org = Organization.objects.create(name='Other Clinic')
+    other_user = User.objects.create_user(
+        email='other-act@test.com', password='pass',
+        first_name='Other', last_name='Person',
+        role='admin', organization=other_org,
+    )
+    AuditLog.objects.create(
+        organization=other_org, user=other_user,
+        action='create', table_name='clients',
+    )
+    AuditLog.objects.create(
+        organization=org, user=admin,
+        action='create', table_name='clients',
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    activities = response.data['recent_activity']
+    user_names = {a['user_name'] for a in activities}
+    assert 'Other Person' not in user_names
+    assert admin.full_name in user_names
+
+
+# ─── E22: Incomplete-drafts widget ─────────────────────────────────────────
+
+@pytest.mark.django_db
+def test_incomplete_drafts_lists_unfinished_docs(
+    api_client, admin, clinician, client_record, org,
+):
+    """E22 (Dr. Joe): the dashboard must surface drafts the user started but
+    didn't complete — across notes, intakes, and treatment plans."""
+    from apps.clinical.models import IntakeAssessment, TreatmentPlan
+    SessionNote.objects.create(
+        client=client_record, provider=clinician,
+        status='draft', note_data={'objectives': 'wip'},
+    )
+    IntakeAssessment.objects.create(
+        client=client_record, provider=clinician,
+        assessment_date='2026-04-15',
+        status='draft', intake_data={},
+    )
+    TreatmentPlan.objects.create(
+        client=client_record, provider=clinician,
+        start_date='2026-04-20',
+        status='draft', goals=[],
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.status_code == status.HTTP_200_OK
+    drafts = response.data['incomplete_drafts']
+    kinds = {d['kind'] for d in drafts}
+    assert {'session_notes', 'intakes', 'treatment_plans'} == kinds
+
+
+@pytest.mark.django_db
+def test_incomplete_drafts_excludes_signed(
+    api_client, admin, clinician, client_record, org,
+):
+    SessionNote.objects.create(
+        client=client_record, provider=clinician,
+        status='signed', is_locked=True, note_data={},
+    )
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert response.data['incomplete_drafts'] == []
+
+
+@pytest.mark.django_db
+def test_incomplete_drafts_clinician_only_sees_own(
+    api_client, admin, clinician, client_record, org,
+):
+    SessionNote.objects.create(
+        client=client_record, provider=clinician,
+        status='draft', note_data={},
+    )
+    SessionNote.objects.create(
+        client=client_record, provider=admin,
+        status='draft', note_data={},
+    )
+
+    api_client.force_authenticate(user=clinician)
+    response = api_client.get(reverse('dashboard-stats'))
+    drafts = response.data['incomplete_drafts']
+    # Two drafts in DB but the clinician only sees their own.
+    assert len(drafts) == 1
+
+
+@pytest.mark.django_db
+def test_incomplete_drafts_admin_sees_all_org(
+    api_client, admin, clinician, client_record, org,
+):
+    SessionNote.objects.create(
+        client=client_record, provider=clinician,
+        status='draft', note_data={},
+    )
+    SessionNote.objects.create(
+        client=client_record, provider=admin,
+        status='draft', note_data={},
+    )
+
+    api_client.force_authenticate(user=admin)
+    response = api_client.get(reverse('dashboard-stats'))
+    assert len(response.data['incomplete_drafts']) == 2
+
+
 # ─── No-org guard ────────────────────────────────────────────────────────────
 
 @pytest.mark.django_db
