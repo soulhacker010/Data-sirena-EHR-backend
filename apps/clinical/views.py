@@ -14,6 +14,7 @@ from rest_framework.parsers import MultiPartParser, FormParser
 from django.db.models import Q
 
 from apps.core.permissions import IsClinicalStaff
+from apps.core.audit_mixins import PHIAccessAuditMixin
 from .models import (
     NoteTemplate, SessionNote, TreatmentPlan, IntakeAssessment,
     Document, Addendum, ContactNote,
@@ -109,7 +110,7 @@ class NoteTemplateViewSet(viewsets.ModelViewSet):
         )
 
 
-class SessionNoteViewSet(AddendumActionMixin, viewsets.ModelViewSet):
+class SessionNoteViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.ModelViewSet):
     """
     Session note CRUD with sign/co-sign actions.
 
@@ -124,6 +125,7 @@ class SessionNoteViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
     addendum_parent_field = 'parent_session_note'
+    audit_table_name = 'notes'
     # `status` is intentionally NOT in filterset_fields — we handle it in
     # get_queryset so we can support the dashboard's `?status=pending` pseudo-
     # value (draft+completed) alongside the normal exact-match values.
@@ -333,7 +335,7 @@ class SessionNoteViewSet(AddendumActionMixin, viewsets.ModelViewSet):
         return Response(SessionNoteSerializer(note).data)
 
 
-class TreatmentPlanViewSet(AddendumActionMixin, viewsets.ModelViewSet):
+class TreatmentPlanViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.ModelViewSet):
     """
     Treatment Plan CRUD with sign, copy, and intake-pull actions (BUILD 4).
 
@@ -350,6 +352,7 @@ class TreatmentPlanViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
     addendum_parent_field = 'parent_treatment_plan'
+    audit_table_name = 'treatment_plans'
     filterset_fields = ['client', 'is_active', 'status']
 
     def get_queryset(self):
@@ -493,7 +496,7 @@ class TreatmentPlanViewSet(AddendumActionMixin, viewsets.ModelViewSet):
         })
 
 
-class IntakeAssessmentViewSet(AddendumActionMixin, viewsets.ModelViewSet):
+class IntakeAssessmentViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.ModelViewSet):
     """
     Intake/Initial Assessment CRUD with sign/co-sign actions (BUILD 3).
 
@@ -507,6 +510,7 @@ class IntakeAssessmentViewSet(AddendumActionMixin, viewsets.ModelViewSet):
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
     addendum_parent_field = 'parent_intake'
+    audit_table_name = 'intakes'
     filterset_fields = ['client', 'provider', 'status']
 
     def get_queryset(self):
@@ -691,7 +695,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         return Response({'url': access_url})
 
 
-class ContactNoteViewSet(viewsets.ModelViewSet):
+class ContactNoteViewSet(PHIAccessAuditMixin, viewsets.ModelViewSet):
     """
     Non-billable client contact log (E19).
 
@@ -707,6 +711,7 @@ class ContactNoteViewSet(viewsets.ModelViewSet):
         all contacts in the org.
     """
     permission_classes = [IsAuthenticated, IsClinicalStaff]
+    audit_table_name = 'contact_notes'
     filterset_fields = ['client', 'provider', 'contact_type']
     ordering_fields = ['contact_date', 'created_at']
     ordering = ['-contact_date']

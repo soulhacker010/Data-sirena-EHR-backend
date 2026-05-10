@@ -30,8 +30,17 @@ celery==5.3.6
 redis==5.0.1
 django-celery-beat==2.6.0
 
+# SMS / Outbound messaging (E26 — appointment reminders)
+# Inactive until SMS_PROVIDER=twilio + TWILIO_* creds are set in env.
+# Until then the StubProvider runs and this dependency only ships unused.
+twilio==9.0.5
+
 # Production
 whitenoise==6.6.0
+
+# Error tracking (Sentry) — PHI-scrubbed via apps.core.sentry.scrub_event.
+# No-op in dev / when SENTRY_DSN is unset.
+sentry-sdk[django]==2.18.0
 
 # Utilities
 Pillow==10.2.0

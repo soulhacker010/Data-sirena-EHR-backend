@@ -23,6 +23,14 @@ app.conf.beat_schedule = {
         'task': 'apps.billing.tasks.poll_oa_outbound',
         'schedule': crontab(minute='*/15'),
     },
+    # E26: SMS reminder dispatcher. Every 5 min it scans pending
+    # AppointmentReminder rows whose scheduled_for is now-ish and queues a
+    # per-row send_reminder task. No-ops cleanly when SMS_PROVIDER=stub
+    # (dev / pre-Twilio production).
+    'dispatch-sms-reminders': {
+        'task': 'apps.messaging.tasks.dispatch_due_reminders',
+        'schedule': crontab(minute='*/5'),
+    },
 }
 
 

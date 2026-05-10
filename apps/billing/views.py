@@ -25,6 +25,8 @@ from rest_framework.response import Response
 from rest_framework.throttling import UserRateThrottle
 from rest_framework.views import APIView
 
+from apps.core.audit_mixins import PHIAccessAuditMixin
+
 logger = logging.getLogger(__name__)
 
 
@@ -151,7 +153,7 @@ from .cpt_catalog import CPTCatalog
 BLOCKED_STATUSES = ('cancelled', 'voided', 'void')
 
 
-class InvoiceViewSet(viewsets.ModelViewSet):
+class InvoiceViewSet(PHIAccessAuditMixin, viewsets.ModelViewSet):
     """
     Invoice CRUD.
 
@@ -161,6 +163,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     POST   /api/v1/invoices/batch/   → Batch generate invoices
     """
     permission_classes = [IsAuthenticated, IsBiller]
+    audit_table_name = 'invoices'
     search_fields = ['invoice_number', 'client__first_name', 'client__last_name']
     ordering_fields = ['invoice_date', 'total_amount', 'created_at']
 
@@ -435,7 +438,7 @@ class PaymentViewSet(viewsets.ModelViewSet):
 
 
 
-class ClaimViewSet(viewsets.ModelViewSet):
+class ClaimViewSet(PHIAccessAuditMixin, viewsets.ModelViewSet):
     """
     Claim CRUD + submit + post-payment + write-off.
 
@@ -445,6 +448,7 @@ class ClaimViewSet(viewsets.ModelViewSet):
     POST        /api/v1/claims/{id}/write-off/    → write off balance
     """
     permission_classes = [IsAuthenticated, IsBiller]
+    audit_table_name = 'claims'
     search_fields = ['claim_number', 'payer_name']
     ordering_fields = ['created_at', 'submitted_at']
 

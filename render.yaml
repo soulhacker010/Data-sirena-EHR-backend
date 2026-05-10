@@ -1,8 +1,10 @@
 databases:
   - name: sirena-ehr-db
-    plan: free
+    plan: basic-256mb
     databaseName: sirena_ehr
     user: sirena
+    region: oregon
+    postgresMajorVersion: "18"
 
 services:
   - type: web

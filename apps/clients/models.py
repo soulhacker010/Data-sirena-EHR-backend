@@ -80,6 +80,19 @@ class Client(OrganizationModel):
     # Analytics — how the client found us
     referral_source = models.CharField(max_length=255, blank=True, default='')
 
+    # E26: SMS appointment reminders. HIPAA / TCPA require explicit consent
+    # before sending automated texts about healthcare. Default off; flip on
+    # only after the client has signed (or verbally confirmed and we logged)
+    # consent. The timestamp is the audit trail Twilio asks for in their BAA.
+    sms_reminders_enabled = models.BooleanField(
+        default=False,
+        help_text='Send SMS appointment reminders. Requires sms_consent_obtained_at.',
+    )
+    sms_consent_obtained_at = models.DateTimeField(
+        null=True, blank=True,
+        help_text='When the client consented to receive SMS reminders.',
+    )
+
     class Meta(OrganizationModel.Meta):
         ordering = ['last_name', 'first_name']
         indexes = [

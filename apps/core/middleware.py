@@ -1,12 +1,17 @@
 """
-Custom middleware for multi-tenancy and audit logging.
+Custom middleware for multi-tenancy, audit logging, and session activity.
 
 OrganizationMiddleware: Attaches request.organization from the authenticated user.
-AuditMiddleware: Logs all write operations to the audit_logs table.
+AuditMiddleware:        Logs all write operations to the audit_logs table.
+LastSeenMiddleware:     Updates User.last_seen_at on each request (debounced)
+                        so the token refresh view can enforce idle timeout.
 """
 import json
 import logging
+from datetime import timedelta
 
+from django.conf import settings
+from django.utils import timezone
 from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
@@ -139,3 +144,62 @@ class AuditMiddleware(MiddlewareMixin):
         if x_forwarded_for:
             return x_forwarded_for.split(',')[0].strip()
         return request.META.get('REMOTE_ADDR', '0.0.0.0')
+
+
+class LastSeenMiddleware(MiddlewareMixin):
+    """
+    Touches User.last_seen_at on every authenticated request, debounced to one
+    write per minute per user so a busy clinician doesn't trigger 100 writes
+    in a session.
+
+    Why this matters: the JWT refresh token lifetime is 7 days. Without an
+    idle-tracking signal, a forgotten browser tab can mint fresh access
+    tokens for a week. By stamping last_seen_at on every request, the token
+    refresh view can short-circuit refreshes from sessions that have been
+    idle for more than IDLE_TIMEOUT_MINUTES (default 30) and force re-login.
+
+    Skipped requests:
+        - Unauthenticated (anonymous, login, password reset, refresh itself)
+        - Token refresh path (we don't want a refresh attempt to count as
+          "activity" — that's circular)
+    """
+
+    DEBOUNCE_SECONDS = 60
+    REFRESH_PATH_SUFFIX = '/auth/token/refresh/'
+
+    def process_request(self, request):
+        if not getattr(request, 'user', None) or not request.user.is_authenticated:
+            return
+        if request.path.endswith(self.REFRESH_PATH_SUFFIX):
+            return
+
+        user = request.user
+        now = timezone.now()
+        last = user.last_seen_at
+        if last and (now - last).total_seconds() < self.DEBOUNCE_SECONDS:
+            return
+
+        # Use update() to skip auto_now / signals — this is hot-path code,
+        # we just want the column written. update_fields keeps the audit
+        # surface tight.
+        try:
+            type(user).objects.filter(pk=user.pk).update(last_seen_at=now)
+            user.last_seen_at = now  # so subsequent middleware sees the new value
+        except Exception:
+            # Never fail a request because we couldn't bump activity timestamp
+            logger.exception('LastSeenMiddleware failed to update last_seen_at')
+
+
+def is_session_idle(user, timeout_minutes: int | None = None) -> bool:
+    """
+    Pure helper used by the token refresh view. Separated from middleware so
+    it's trivially unit-testable without a request.
+
+    A user with no last_seen_at (first-ever refresh, or migrated user) is
+    treated as not idle — we don't lock them out on first access.
+    """
+    if user.last_seen_at is None:
+        return False
+    timeout_minutes = timeout_minutes if timeout_minutes is not None \
+        else getattr(settings, 'IDLE_TIMEOUT_MINUTES', 30)
+    return (timezone.now() - user.last_seen_at) > timedelta(minutes=timeout_minutes)

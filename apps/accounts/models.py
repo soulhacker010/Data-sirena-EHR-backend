@@ -73,6 +73,12 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     last_login = models.DateTimeField(null=True, blank=True)
+    # Idle-timeout tracking. Updated by LastSeenMiddleware on every authenticated
+    # request, debounced to ≤ 1 write/min/user. The token refresh view rejects
+    # refreshes when (now - last_seen_at) > IDLE_TIMEOUT_MINUTES so an
+    # abandoned tab can't keep itself logged in for the full refresh-token
+    # lifetime (7 days).
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

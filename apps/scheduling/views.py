@@ -19,6 +19,7 @@ from django.db import transaction
 from django.db.models import F
 
 from apps.core.permissions import IsFrontDesk
+from apps.core.audit_mixins import PHIAccessAuditMixin
 from .models import Appointment
 from .serializers import (
     AppointmentSerializer,
@@ -31,13 +32,14 @@ from .services import RecurrenceGenerator
 logger = logging.getLogger(__name__)
 
 
-class AppointmentViewSet(viewsets.ModelViewSet):
+class AppointmentViewSet(PHIAccessAuditMixin, viewsets.ModelViewSet):
     """
     Full CRUD for appointments with recurring support.
 
     Filters: client, provider, status, start_time range
     """
     permission_classes = [IsAuthenticated, IsFrontDesk]
+    audit_table_name = 'appointments'
     pagination_class = None  # Calendar views need a flat array, not paginated
     filterset_fields = ['client', 'provider', 'status', 'location']
     search_fields = ['notes', 'service_code']

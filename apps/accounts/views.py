@@ -64,14 +64,20 @@ class LoginView(generics.GenericAPIView):
 
     def post(self, request):
         from apps.audit.utils import write_audit
+        from rest_framework.exceptions import ValidationError
+
         serializer = self.get_serializer(data=request.data)
 
         if not serializer.is_valid():
-            # Failed login attempt — log before raising
+            # Failed login attempt — audit log first, then raise a proper
+            # ValidationError so DRF returns 400. The previous form
+            # `raise serializer.errors.__class__(serializer.errors)` raised
+            # KeyError because ReturnDict requires a `serializer=` kwarg —
+            # turning every bad-creds login into a 500 in production.
             write_audit(request, 'failed_login', 'auth', changes={
                 'username': request.data.get('email', request.data.get('username', '')),
             })
-            raise serializer.errors.__class__(serializer.errors)
+            raise ValidationError(serializer.errors)
 
         user = serializer.validated_data['user']
         user.last_login = timezone.now()
@@ -339,8 +345,13 @@ class PasswordResetConfirmView(APIView):
     POST /api/v1/auth/password-reset/confirm/
 
     Validates the token and sets a new password.
+
+    Throttled the same as login: the reset token has a vast search space
+    (HMAC-based via default_token_generator) but rate-limiting cuts the
+    confirm endpoint off as a brute-force surface entirely. Defense in depth.
     """
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         uid_b64 = request.data.get('uid', '')

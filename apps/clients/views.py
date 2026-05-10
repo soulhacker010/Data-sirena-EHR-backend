@@ -63,14 +63,21 @@ class ClientViewSet(viewsets.ModelViewSet):
         return ClientSerializer
 
     def retrieve(self, request, *args, **kwargs):
-        """Log PHI access every time a client record is opened."""
+        """
+        Log PHI access every time a client record is opened.
+
+        Audit log is intentionally PHI-free — only the record_id goes in,
+        no name, DOB, or other identifiers. The audit log can be exported
+        for compliance review without re-leaking patient data.
+        """
         response = super().retrieve(request, *args, **kwargs)
         try:
             from apps.audit.utils import write_audit
-            client = self.get_object()
-            write_audit(request, 'phi_access', 'clients', record_id=str(client.id), changes={
-                'client_name': f'{client.first_name} {client.last_name}',
-            })
+            write_audit(
+                request, 'phi_access', 'clients',
+                record_id=str(kwargs.get('pk', '')),
+                changes=None,
+            )
         except Exception:
             pass
         return response

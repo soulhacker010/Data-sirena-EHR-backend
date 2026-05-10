@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'apps.dashboard',
     'apps.reports',
     'apps.notifications',
+    'apps.messaging',
 ]
 
 MIDDLEWARE = [
@@ -61,6 +62,7 @@ MIDDLEWARE = [
     # Custom middleware (added after apps are ready)
     'apps.core.middleware.OrganizationMiddleware',
     'apps.core.middleware.AuditMiddleware',
+    'apps.core.middleware.LastSeenMiddleware',
 ]
 
 ROOT_URLCONF = 'config.urls'
@@ -152,6 +154,10 @@ REST_FRAMEWORK = {
         'anon': os.getenv('DRF_THROTTLE_ANON', '20/min'),
         'login': os.getenv('DRF_THROTTLE_LOGIN', '5/min'),
         'email': os.getenv('DRF_THROTTLE_EMAIL', '10/min'),
+        # Token refresh: legit clients refresh roughly every 14 min when active.
+        # 30/hour leaves headroom for tab-spam and short-lived multi-tab sessions
+        # while blunting brute-force scans of leaked refresh tokens.
+        'token_refresh': os.getenv('DRF_THROTTLE_TOKEN_REFRESH', '30/hour'),
     },
 }
 
@@ -168,6 +174,12 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+
+# Session idle timeout (minutes). The token refresh view rejects refreshes
+# from sessions whose User.last_seen_at is older than this. HIPAA-style
+# guidance for clinical applications is 15 min; we picked 30 as a balance —
+# clinicians shouldn't get kicked out mid-note for a slow paragraph.
+IDLE_TIMEOUT_MINUTES = int(os.getenv('IDLE_TIMEOUT_MINUTES', 30))
 
 # FIX #7: Use custom auth class that checks is_active on every request
 # (default simplejwt only checks is_active at login time)
@@ -209,6 +221,45 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# ─── SMS / Messaging ───────────────────────────────────────────────────────────
+# E26: outbound SMS appointment reminders. The provider abstraction
+# (apps.messaging.providers) lets us run on the in-process StubProvider in
+# dev / CI / pre-credentials production, and switch to Twilio by flipping
+# SMS_PROVIDER=twilio plus the three Twilio env vars below.
+
+SMS_PROVIDER = os.getenv('SMS_PROVIDER', 'stub')  # 'stub' | 'twilio'
+
+# Reminder cadence — Dr. Joe asked for multi-step nudges, especially for
+# first responders who need more than one. 48h gives enough time to reschedule;
+# 24h is the standard "you have something tomorrow"; 2h is the day-of nudge.
+SMS_REMINDER_LEAD_TIMES_HOURS = [48, 24, 2]
+
+# How often the dispatcher beat task runs. 5 min keeps the queue fresh without
+# hammering the DB; combined with quiet-hours shifting it gives ±5 min jitter
+# which is fine for appointment reminders.
+SMS_REMINDER_DISPATCH_INTERVAL_MINUTES = 5
+
+# If a reminder didn't get sent within this many hours of its scheduled time
+# (worker outage, beat restart), give up and skip rather than firing a stale
+# "tomorrow" reminder six hours late.
+SMS_REMINDER_STALE_WINDOW_HOURS = 1
+
+# Quiet hours in practice-local time (America/New_York). (21, 8) = no sends
+# from 9pm through 7:59am. Reminders that fall in this window are deferred
+# to the start of the next non-quiet hour.
+SMS_QUIET_HOURS_LOCAL = (21, 8)
+
+# Twilio credentials — set in production env when account is provisioned.
+# Empty string means "not configured"; TwilioProvider raises ProviderError
+# at construction so the system fails loudly if SMS_PROVIDER=twilio without
+# creds.
+TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
+TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
+TWILIO_FROM_NUMBER = os.getenv('TWILIO_FROM_NUMBER', '')
+
+# Practice callback number that appears in every reminder ("Questions: …").
+PRACTICE_CALLBACK_PHONE = os.getenv('PRACTICE_CALLBACK_PHONE', '')
 
 # ─── Application ───────────────────────────────────────────────────────────────
 
