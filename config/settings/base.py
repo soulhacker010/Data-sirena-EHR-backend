@@ -222,6 +222,22 @@ CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 
+# ─── Office Ally (clearinghouse) ──────────────────────────────────────────────
+# SFTP credentials for X12 837P claim submission. apps.billing.services.office_ally
+# reads these via getattr(settings, 'OA_SFTP_*'); without them surfaced here,
+# the env vars set in Render are invisible to Django and _is_configured()
+# always returns False even when the values are present in os.environ.
+OA_SFTP_HOST = os.getenv('OA_SFTP_HOST', '')
+OA_SFTP_PORT = int(os.getenv('OA_SFTP_PORT', '22'))
+OA_SFTP_USERNAME = os.getenv('OA_SFTP_USERNAME', '')
+OA_SFTP_PASSWORD = os.getenv('OA_SFTP_PASSWORD', '')
+OA_SFTP_INBOUND = os.getenv('OA_SFTP_INBOUND', '/inbound')
+OA_SFTP_OUTBOUND = os.getenv('OA_SFTP_OUTBOUND', '/outbound')
+# Production safety switch: until OA_GO_LIVE=true, generated claim files
+# are prefixed OATEST_ so Office Ally parses them but does not forward to
+# payers. Flip to true only after a successful test submission round.
+OA_GO_LIVE = os.getenv('OA_GO_LIVE', 'false').lower() in ('true', '1', 'yes')
+
 # ─── SMS / Messaging ───────────────────────────────────────────────────────────
 # E26: outbound SMS appointment reminders. The provider abstraction
 # (apps.messaging.providers) lets us run on the in-process StubProvider in

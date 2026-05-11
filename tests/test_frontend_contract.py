@@ -451,82 +451,10 @@ class TestDocumentManagement:
         )
         assert resp.status_code == status.HTTP_404_NOT_FOUND
 
-    @override_settings(CLOUDINARY_STORAGE={
-        'CLOUD_NAME': 'demo-cloud',
-        'API_KEY': 'demo-key',
-        'API_SECRET': 'demo-secret',
-    })
-    def test_upload_document_uses_cloudinary_folder_structure(self, admin_client, sample_client):
-        with patch('apps.clinical.services.cloudinary.uploader.upload') as mock_upload:
-            mock_upload.return_value = {
-                'public_id': 'sirena/client-documents/2026-03-17/test-client/test_doc',
-            }
-            resp = admin_client.post(
-                f'/api/v1/clients/{sample_client.id}/documents/',
-                {'file': self._make_file(), 'document_type': 'consent'},
-                format='multipart',
-            )
-
-        assert resp.status_code == status.HTTP_201_CREATED, f"Upload failed with {resp.status_code}: {resp.data}"
-        assert resp.data['file_path'] == ''
-        _, kwargs = mock_upload.call_args
-        assert kwargs['folder'].startswith('sirena/client-documents/')
-        assert kwargs['type'] == 'authenticated'
-        assert str(sample_client.id) in kwargs['folder']
-
-    @override_settings(CLOUDINARY_STORAGE={
-        'CLOUD_NAME': 'demo-cloud',
-        'API_KEY': 'demo-key',
-        'API_SECRET': 'demo-secret',
-    })
-    def test_delete_document_removes_cloudinary_asset(self, admin_client, sample_client, admin_user):
-        from apps.clinical.models import Document
-
-        document = Document.objects.create(
-            client=sample_client,
-            uploaded_by=admin_user,
-            file_name='consent.pdf',
-            file_type='application/pdf',
-            file_size=123,
-            file_path='https://res.cloudinary.com/demo/raw/upload/v1/consent.pdf',
-            cloudinary_public_id='sirena/client-documents/2026-03-17/client-folder/consent',
-        )
-
-        with patch('apps.clinical.services.cloudinary.uploader.destroy') as mock_destroy:
-            mock_destroy.return_value = {'result': 'ok'}
-            resp = admin_client.delete(f'/api/v1/clients/{sample_client.id}/documents/{document.id}/')
-
-        assert resp.status_code == status.HTTP_204_NO_CONTENT
-        mock_destroy.assert_called_once()
-        assert not Document.objects.filter(id=document.id).exists()
-
-    @override_settings(CLOUDINARY_STORAGE={
-        'CLOUD_NAME': 'demo-cloud',
-        'API_KEY': 'demo-key',
-        'API_SECRET': 'demo-secret',
-    })
-    def test_document_access_returns_signed_url(self, admin_client, sample_client, admin_user):
-        from apps.clinical.models import Document
-
-        document = Document.objects.create(
-            client=sample_client,
-            uploaded_by=admin_user,
-            file_name='consent.pdf',
-            file_type='application/pdf',
-            file_size=123,
-            file_path='',
-            cloudinary_public_id='sirena/client-documents/2026-03-17/client-folder/consent',
-        )
-
-        with patch('apps.clinical.services.private_download_url') as mock_private_download_url:
-            mock_private_download_url.return_value = 'https://api.cloudinary.com/v1_1/demo/raw/download/signed'
-            resp = admin_client.get(f'/api/v1/clients/{sample_client.id}/documents/{document.id}/access/')
-
-        assert resp.status_code == status.HTTP_200_OK
-        assert resp.data['url'] == 'https://api.cloudinary.com/v1_1/demo/raw/download/signed'
-        _, kwargs = mock_private_download_url.call_args
-        assert kwargs['resource_type'] == 'raw'
-        assert kwargs['type'] == 'authenticated'
+    # Document upload / delete / signed-URL tests previously exercised the
+    # Cloudinary integration. Cloudinary was migrated out in favour of S3
+    # (see apps/clinical/migrations/0004_rename_cloudinary_to_s3.py); the
+    # corresponding S3 tests live in test_clients.py / test_workflows.py.
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -577,7 +505,7 @@ class TestFrontendContract:
             file_type='application/pdf',
             file_size=456,
             file_path='',
-            cloudinary_public_id='sirena/client-documents/2026-03-17/client-folder/plan',
+            s3_key='sirena/client-documents/2026-03-17/client-folder/plan',
         )
 
         resp = admin_client.get(f'/api/v1/clients/{sample_client.id}/')
