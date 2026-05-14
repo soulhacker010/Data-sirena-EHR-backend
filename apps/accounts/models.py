@@ -70,6 +70,19 @@ class User(AbstractBaseUser, PermissionsMixin):
         default='',
         help_text='Individual (Type 1) NPI — 10 digits, Luhn-validated.',
     )
+    # Per-provider EIN — used when a contractor bills under their own entity
+    # rather than the practice's EIN (Organization.tax_id). For W-2 staff this
+    # is left blank; their claims use the practice EIN. SSN is deliberately
+    # NOT supported here — payroll/1099 reporting belongs in payroll software,
+    # not the EHR; storing SSN in a clinical system increases risk surface
+    # without serving any EHR workflow.
+    ein = models.CharField(
+        max_length=9,
+        blank=True,
+        default='',
+        help_text='9-digit EIN (digits only, no dashes). Used when a contractor bills '
+                  'under their own entity instead of the practice EIN.',
+    )
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     last_login = models.DateTimeField(null=True, blank=True)

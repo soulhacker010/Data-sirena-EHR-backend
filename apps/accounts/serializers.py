@@ -91,6 +91,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
             'phone', 'licenses', 'credentials', 'npi',
+            'ein',
             'is_active', 'is_supervisor',
             'organization_id', 'organization_name',
             'last_login', 'created_at', 'updated_at',
@@ -115,7 +116,35 @@ class _NPIValidationMixin:
         return cleaned
 
 
-class UserCreateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
+class _EINValidationMixin:
+    """Shared validator for the per-user EIN field.
+
+    Strips dashes/whitespace so downstream code always sees digits-only.
+    Empty string is allowed (most W-2 staff bill under the practice EIN
+    and don't carry their own).
+
+    Subclasses MUST relax the auto-generated `ein` field's max_length
+    via Meta.extra_kwargs (or an explicit field declaration), otherwise
+    DRF inherits the model's `max_length=9` cap and rejects "83-2541331"
+    (11 chars with the dash) before this validator can strip it. The
+    standard incantation:
+
+        class Meta:
+            ...
+            extra_kwargs = {'ein': {'max_length': 11}}
+    """
+
+    def validate_ein(self, value: str) -> str:
+        import re
+        cleaned = re.sub(r'\D', '', value or '')
+        if cleaned and len(cleaned) != 9:
+            raise serializers.ValidationError(
+                'EIN must be 9 digits (e.g., 12-3456789).'
+            )
+        return cleaned
+
+
+class UserCreateSerializer(_NPIValidationMixin, _EINValidationMixin, serializers.ModelSerializer):
     """For admin creating new users."""
     password = serializers.CharField(write_only=True, min_length=8)
     organization_id = serializers.UUIDField(write_only=True)
@@ -125,9 +154,13 @@ class UserCreateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
         fields = [
             'id', 'email', 'first_name', 'last_name', 'role',
             'phone', 'licenses', 'credentials', 'npi',
+            'ein',
             'password', 'organization_id',
         ]
         read_only_fields = ['id']
+        # See _EINValidationMixin: relax max_length so a user-supplied
+        # "12-3456789" makes it through to the strip-punctuation validator.
+        extra_kwargs = {'ein': {'max_length': 11}}
 
     def create(self, validated_data):
         org_id = validated_data.pop('organization_id')
@@ -142,7 +175,7 @@ class UserCreateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
         return UserSerializer(instance, context=self.context).data
 
 
-class UserUpdateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
+class UserUpdateSerializer(_NPIValidationMixin, _EINValidationMixin, serializers.ModelSerializer):
     """For admin updating existing users.
 
     Allows email and phone updates (B13). Email uniqueness is enforced at the
@@ -150,13 +183,19 @@ class UserUpdateSerializer(_NPIValidationMixin, serializers.ModelSerializer):
     instance being updated so a no-op save (same email) doesn't trip.
 
     NPI (E5) is admin-editable and Luhn-validated by the mixin.
+    EIN (Dr. Joe 2026-05-12 feedback) is admin-editable. SSN was intentionally
+    not added — payroll lives outside the EHR.
     """
     class Meta:
         model = User
         fields = [
             'first_name', 'last_name', 'email', 'phone', 'role',
-            'licenses', 'credentials', 'npi', 'is_active',
+            'licenses', 'credentials', 'npi',
+            'ein',
+            'is_active',
         ]
+        # See _EINValidationMixin: same relaxed input width on update.
+        extra_kwargs = {'ein': {'max_length': 11}}
 
     def validate_email(self, value: str) -> str:
         normalized = (value or '').strip().lower()
