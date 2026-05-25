@@ -7,9 +7,24 @@ User management moved to top-level /api/v1/users/ (not under /auth/).
 import os
 
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
 
+
+def _root_health(_request):
+    """
+    Lightweight 200 OK for Render's uptime probe.
+
+    Render's platform pings `GET /` to confirm the service is alive. Without
+    a handler this returns 404 and spams the request log with WARN entries
+    every minute. A flat 200 makes those checks silent and gives any other
+    "is the box up?" probe a sane response too.
+    """
+    return JsonResponse({'status': 'ok', 'service': 'sirena-ehr-backend'})
+
+
 urlpatterns = [
+    path('', _root_health, name='health'),
     path(f'{os.getenv("DJANGO_ADMIN_URL", "admin")}/', admin.site.urls),
 
     # API v1
