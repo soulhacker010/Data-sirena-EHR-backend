@@ -252,6 +252,28 @@ class UserViewSet(viewsets.ModelViewSet):
         instance.is_active = False
         instance.save(update_fields=['is_active'])
 
+    def perform_update(self, serializer):
+        """
+        Same self-lockout guard as perform_destroy, but for the PATCH path.
+
+        The frontend deactivate button now calls PATCH (so it can send just
+        `{is_active: false}` without a full payload). Without this guard, an
+        admin could PATCH their own row and lock themselves out — the
+        ValidationError on DELETE wouldn't fire.
+        """
+        instance = serializer.instance
+        new_is_active = serializer.validated_data.get('is_active', instance.is_active)
+        if (
+            instance.pk == self.request.user.pk
+            and instance.is_active
+            and new_is_active is False
+        ):
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError(
+                {'detail': 'You cannot deactivate your own account.'}
+            )
+        serializer.save()
+
     @action(detail=True, methods=['post'], url_path='send-reset-link')
     def send_reset_link(self, request, pk=None):
         """

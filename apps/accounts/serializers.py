@@ -162,6 +162,23 @@ class UserCreateSerializer(_NPIValidationMixin, _EINValidationMixin, serializers
         # "12-3456789" makes it through to the strip-punctuation validator.
         extra_kwargs = {'ein': {'max_length': 11}}
 
+    def validate_email(self, value: str) -> str:
+        """
+        Reject duplicate emails at the serializer level so admins see a clean
+        400 with a useful message ("A user with this email already exists.")
+        instead of a generic 500 from the DB-level UNIQUE constraint. This is
+        the Add User bug Dr. Joe hit — without this validator, typing an
+        existing staff email surfaced "Failed to add user" with no clue why.
+        """
+        normalized = (value or '').strip().lower()
+        if not normalized:
+            raise serializers.ValidationError('Email cannot be blank.')
+        if User.objects.filter(email__iexact=normalized).exists():
+            raise serializers.ValidationError(
+                'A user with this email already exists.'
+            )
+        return normalized
+
     def create(self, validated_data):
         org_id = validated_data.pop('organization_id')
         password = validated_data.pop('password')

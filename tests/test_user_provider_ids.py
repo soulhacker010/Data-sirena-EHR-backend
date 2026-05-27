@@ -243,3 +243,156 @@ class TestAllRolesProfileFlow:
         assert r.status_code == 200, (role, r.data)
         user.refresh_from_db()
         assert user.npi == '', f'{role} was able to self-assign NPI'
+
+
+# ─── Bug fixes from Dr. Joe 2026-05-27 feedback ─────────────────────────────
+
+@pytest.mark.django_db
+class TestAddUserDuplicateEmail:
+    """Dr. Joe report: 'I noticed on the user management I can't add new users.'
+    Root cause: UserCreateSerializer had no email-uniqueness validator, so a
+    duplicate email triggered a DB-level IntegrityError → 500 → frontend toast
+    showed a generic 'Failed to add user' with no useful message. The fix
+    adds a serializer-level check so duplicates return a clean 400 with
+    'A user with this email already exists.'"""
+
+    def test_duplicate_email_returns_clean_400(self, admin_client, org, admin_user):
+        # admin_user already has email 'admin@testclinic.com'
+        r = admin_client.post('/api/v1/auth/users/', {
+            'email': 'admin@testclinic.com',  # already taken
+            'first_name': 'Second',
+            'last_name': 'Admin',
+            'role': 'clinician',
+            'password': 'StrongPass1!',
+            'organization_id': str(org.id),
+        }, format='json')
+
+        assert r.status_code == 400, r.data
+        # Message should mention email or already-exists, not be generic
+        body = str(r.data).lower()
+        assert 'email' in body and ('exist' in body or 'already' in body), (
+            f'Error message should explain the duplicate-email problem, got: {r.data}'
+        )
+
+    def test_duplicate_email_case_insensitive(self, admin_client, org, admin_user):
+        """Case difference shouldn't sneak past the uniqueness check —
+        'Admin@testclinic.com' and 'admin@testclinic.com' are the same user."""
+        r = admin_client.post('/api/v1/auth/users/', {
+            'email': 'ADMIN@testclinic.com',  # case-different version of existing
+            'first_name': 'Second',
+            'last_name': 'Admin',
+            'role': 'clinician',
+            'password': 'StrongPass1!',
+            'organization_id': str(org.id),
+        }, format='json')
+        assert r.status_code == 400, r.data
+
+    def test_unique_email_still_succeeds(self, admin_client, org):
+        r = admin_client.post('/api/v1/auth/users/', {
+            'email': 'brandnew@testclinic.com',
+            'first_name': 'Brand',
+            'last_name': 'New',
+            'role': 'clinician',
+            'password': 'StrongPass1!',
+            'organization_id': str(org.id),
+        }, format='json')
+        assert r.status_code == 201, r.data
+
+
+@pytest.mark.django_db
+class TestPartialUpdateForDeactivate:
+    """Dr. Joe report: 'The deactivate button is not working either.'
+    Root cause: the frontend was calling PUT /api/v1/auth/users/{id}/ with
+    only {is_active: false}. PUT requires every non-blank model field
+    (first_name, last_name, email, role), so DRF returned 400. The frontend
+    has been switched to PATCH; this test pins the backend's PATCH support
+    so a future regression in the ViewSet doesn't break deactivate again."""
+
+    def test_patch_with_only_is_active_succeeds(self, admin_client, clinician_user):
+        r = admin_client.patch(
+            f'/api/v1/auth/users/{clinician_user.id}/',
+            {'is_active': False},
+            format='json',
+        )
+        assert r.status_code == 200, r.data
+        clinician_user.refresh_from_db()
+        assert clinician_user.is_active is False
+
+    def test_patch_reactivate(self, admin_client, clinician_user):
+        clinician_user.is_active = False
+        clinician_user.save(update_fields=['is_active'])
+
+        r = admin_client.patch(
+            f'/api/v1/auth/users/{clinician_user.id}/',
+            {'is_active': True},
+            format='json',
+        )
+        assert r.status_code == 200, r.data
+        clinician_user.refresh_from_db()
+        assert clinician_user.is_active is True
+
+    def test_put_with_only_is_active_still_rejected(self, admin_client, clinician_user):
+        """Sanity: PUT (full update) still requires the model-required fields.
+        This test exists to document the original bug. If it ever passes,
+        the validator changed and the frontend's switch to PATCH may no
+        longer be necessary."""
+        r = admin_client.put(
+            f'/api/v1/auth/users/{clinician_user.id}/',
+            {'is_active': False},
+            format='json',
+        )
+        assert r.status_code == 400, (
+            'PUT-only-is_active should still be rejected — if this now passes, '
+            'UserUpdateSerializer required fields changed.'
+        )
+
+
+@pytest.mark.django_db
+class TestSelfDeactivationGuard:
+    """Safety: admin must not be able to deactivate themselves and lock the
+    organization out. perform_destroy blocks the DELETE path; perform_update
+    blocks the PATCH path (added 2026-05-27 when the deactivate button was
+    moved from PUT/DELETE to PATCH and the original guard stopped catching
+    it). Both paths are tested here so a future refactor can't quietly
+    re-open the lockout vector."""
+
+    def test_admin_cannot_self_deactivate_via_patch(self, admin_client, admin_user):
+        r = admin_client.patch(
+            f'/api/v1/auth/users/{admin_user.id}/',
+            {'is_active': False},
+            format='json',
+        )
+        assert r.status_code == 400, r.data
+        admin_user.refresh_from_db()
+        assert admin_user.is_active is True, 'admin successfully self-deactivated'
+
+    def test_admin_cannot_self_deactivate_via_delete(self, admin_client, admin_user):
+        r = admin_client.delete(f'/api/v1/auth/users/{admin_user.id}/')
+        assert r.status_code == 400, r.data
+        admin_user.refresh_from_db()
+        assert admin_user.is_active is True
+
+    def test_admin_can_deactivate_other_user(self, admin_client, clinician_user):
+        """Sanity: the self-guard doesn't block deactivating OTHER users."""
+        r = admin_client.patch(
+            f'/api/v1/auth/users/{clinician_user.id}/',
+            {'is_active': False},
+            format='json',
+        )
+        assert r.status_code == 200, r.data
+        clinician_user.refresh_from_db()
+        assert clinician_user.is_active is False
+
+    def test_admin_can_edit_own_other_fields(self, admin_client, admin_user):
+        """The self-guard only fires when is_active is being flipped to False
+        on the current user — admin must still be able to update their own
+        name, phone, credentials, etc. without tripping the lockout check."""
+        r = admin_client.patch(
+            f'/api/v1/auth/users/{admin_user.id}/',
+            {'first_name': 'Renamed'},
+            format='json',
+        )
+        assert r.status_code == 200, r.data
+        admin_user.refresh_from_db()
+        assert admin_user.first_name == 'Renamed'
+        assert admin_user.is_active is True
