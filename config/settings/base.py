@@ -20,6 +20,11 @@ DEBUG = os.getenv('DEBUG', 'true').lower() in ('true', '1', 'yes')
 
 # Application definition
 INSTALLED_APPS = [
+    # Daphne MUST come before django.contrib.staticfiles so its `runserver`
+    # patch wins. With it first, `manage.py runserver` dispatches HTTP and
+    # WebSocket properly in development; without it, only HTTP works.
+    'daphne',
+
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -28,6 +33,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     # Third-party
+    'channels',
     'rest_framework',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
@@ -47,6 +53,7 @@ INSTALLED_APPS = [
     'apps.reports',
     'apps.notifications',
     'apps.messaging',
+    'apps.bls',
 ]
 
 MIDDLEWARE = [
@@ -221,6 +228,63 @@ CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
+
+# ─── Channels (Bilateral Stimulation real-time layer) ──────────────────────────
+#
+# Same Redis instance as Celery + the throttle cache; we keep this on database
+# *2* so the channel-layer pub-sub traffic doesn't collide with broker queues
+# (db 0) or the throttle cache (db 1). The full division of Redis databases:
+#
+#   db 0 → Celery broker / results
+#   db 1 → DRF throttle cache
+#   db 2 → Channels layer  ← this one
+#
+# CHANNELS_REDIS_URL can be set explicitly if a different host is needed in
+# production; otherwise we derive from REDIS_URL by swapping the db number.
+ASGI_APPLICATION = 'config.asgi.application'
+
+_default_redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+
+
+def _channels_redis_url() -> str:
+    explicit = os.getenv('CHANNELS_REDIS_URL')
+    if explicit:
+        return explicit
+    # Replace trailing /<db> with /2 if present, else append /2.
+    base = _default_redis_url.rstrip('/')
+    if base.endswith('/0') or base.endswith('/1'):
+        return base[:-2] + '/2'
+    return base + '/2'
+
+
+# Channels backend selection. Dev defaults to the in-memory layer so a
+# laptop without Redis installed can still run /ws/* end-to-end (single
+# Daphne process — group pub/sub is process-local). Production must set
+# CHANNELS_BACKEND=redis so multiple web instances see each other's groups.
+_channels_backend = os.getenv(
+    'CHANNELS_BACKEND',
+    'redis' if os.getenv('REDIS_URL') else 'inmemory',
+).lower()
+
+if _channels_backend == 'inmemory':
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        },
+    }
+else:
+    CHANNEL_LAYERS = {
+        'default': {
+            'BACKEND': 'channels_redis.core.RedisChannelLayer',
+            'CONFIG': {
+                'hosts': [_channels_redis_url()],
+                # Keep BLS session traffic small + fast. Capacity / expiry tuned
+                # for typical clinical sessions: <100 msgs/min, lifetime <2 hours.
+                'capacity': 1500,
+                'expiry': 60,
+            },
+        },
+    }
 
 # ─── Office Ally (clearinghouse) ──────────────────────────────────────────────
 # SFTP credentials for X12 837P claim submission. apps.billing.services.office_ally

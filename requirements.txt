@@ -33,6 +33,14 @@ celery==5.3.6
 redis==5.0.1
 django-celery-beat==2.6.0
 
+# Real-time (Bilateral Stimulation module)
+# Django Channels + ASGI server + Redis channel layer.
+# Daphne MUST be the first item in INSTALLED_APPS — it patches the runserver
+# command to dispatch HTTP and WebSocket properly during local dev.
+channels==4.0.0
+channels-redis==4.2.0
+daphne==4.1.0
+
 # SMS / Outbound messaging (E26 — appointment reminders)
 # Inactive until SMS_PROVIDER=twilio + TWILIO_* creds are set in env.
 # Until then the StubProvider runs and this dependency only ships unused.

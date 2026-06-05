@@ -12,7 +12,14 @@ services:
     runtime: python
     plan: free
     buildCommand: ./build.sh
-    startCommand: gunicorn config.wsgi:application --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    # Switched from gunicorn (WSGI only) to daphne (ASGI — handles both HTTP
+    # and WebSocket). Daphne dispatches HTTP requests to the standard Django
+    # app and routes /ws/* upgrades through Channels' ProtocolTypeRouter,
+    # so the BLS module's real-time consumers work over the same port.
+    # See config/asgi.py for the routing decision. Workers were 2 with
+    # gunicorn — daphne uses one process with async I/O so concurrency is
+    # bound by the event loop, not worker count.
+    startCommand: daphne -b 0.0.0.0 -p $PORT --proxy-headers config.asgi:application
     envVars:
       - key: DJANGO_SETTINGS_MODULE
         value: config.settings.production
@@ -29,6 +36,11 @@ services:
       - key: DATABASE_SSL_REQUIRE
         value: "true"
       - key: CORS_ALLOWED_ORIGINS
+        sync: false
+      # Comma-separated list of origins (with scheme) allowed to open
+      # WebSockets. Must include every domain the frontend ships from.
+      # Example: https://sirena-ehr.vercel.app,https://app.sirenahealth.com
+      - key: WS_ALLOWED_ORIGINS
         sync: false
       - key: FRONTEND_BASE_URL
         sync: false
@@ -64,6 +76,12 @@ services:
         value: us-east-1
       - key: REDIS_URL
         sync: false
+      # Pin Channels to Redis in prod. Without this, a missing REDIS_URL
+      # would silently drop to InMemoryChannelLayer, which can't share
+      # group state across web instances — therapist and client sockets
+      # routed to different processes would never see each other.
+      - key: CHANNELS_BACKEND
+        value: redis
       - key: PYTHON_VERSION
         value: "3.10.0"
 
