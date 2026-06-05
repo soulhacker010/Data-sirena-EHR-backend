@@ -30,12 +30,17 @@ class TestCreateSession:
         data = response.json()
         assert 'session_id' in data
         assert 'token' in data
+        assert 'short_code' in data
         assert 'invite_url' in data
-        assert data['invite_url'].endswith(f'/bls/c/{data["token"]}')
+        # Invite URL now uses the short code, not the full signed token —
+        # cleaner to share, same security.
+        assert data['invite_url'].endswith(f'/bls/c/{data["short_code"]}')
+        assert len(data['short_code']) == 6
         assert data['expires_in_seconds'] > 0
 
         session = BLSSession.objects.get(id=data['session_id'])
         assert session.status == BLSSessionStatus.CREATED
+        assert session.short_code == data['short_code']
         # The DB stores the SHA-256 hash, never the raw token
         assert session.token_hash != data['token']
         assert len(session.token_hash) == 64
@@ -89,6 +94,88 @@ class TestVerifyToken:
         response = public_client.get('/api/v1/bls/sessions/verify/')
         assert response.status_code == 200
         assert response.json()['valid'] is False
+
+
+@pytest.mark.django_db
+class TestResolveShortCode:
+    def test_valid_code_returns_fresh_token(self, clinician_client, sample_client):
+        create_resp = clinician_client.post(
+            '/api/v1/bls/sessions/',
+            {'client_id': str(sample_client.id)},
+            format='json',
+        )
+        short_code = create_resp.json()['short_code']
+
+        from rest_framework.test import APIClient
+        public_client = APIClient()
+        resolve_resp = public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': short_code},
+        )
+        assert resolve_resp.status_code == 200, resolve_resp.content
+        data = resolve_resp.json()
+        assert data['session_id'] == create_resp.json()['session_id']
+        assert data['status'] == 'created'
+        assert data['token']
+        # The newly minted token should pass /verify/ — confirms the
+        # resolve path produces a real working token.
+        verify_resp = public_client.get(
+            '/api/v1/bls/sessions/verify/',
+            {'token': data['token']},
+        )
+        assert verify_resp.json()['valid'] is True
+
+    def test_unknown_code_returns_404(self):
+        from rest_framework.test import APIClient
+        public_client = APIClient()
+        response = public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': 'AAAAAA'},
+        )
+        assert response.status_code == 404
+
+    def test_malformed_code_returns_404(self):
+        from rest_framework.test import APIClient
+        public_client = APIClient()
+        # Wrong length
+        assert public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': 'ABC'},
+        ).status_code == 404
+        # Disallowed char (lowercase isn't in Crockford alphabet)
+        assert public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': 'abcdef'},
+        ).status_code == 404
+        # Confusable letter (O is intentionally removed from alphabet)
+        assert public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': 'OOOOOO'},
+        ).status_code == 404
+
+    def test_ended_session_code_returns_404(self, clinician_client, sample_client):
+        create_resp = clinician_client.post(
+            '/api/v1/bls/sessions/',
+            {'client_id': str(sample_client.id)},
+            format='json',
+        )
+        short_code = create_resp.json()['short_code']
+        session_id = create_resp.json()['session_id']
+
+        # End the session
+        clinician_client.post(
+            f'/api/v1/bls/sessions/{session_id}/end/',
+            {'duration_seconds': 60, 'pass_count': 10, 'set_count': 1},
+            format='json',
+        )
+
+        from rest_framework.test import APIClient
+        public_client = APIClient()
+        response = public_client.get(
+            '/api/v1/bls/sessions/resolve/',
+            {'code': short_code},
+        )
+        assert response.status_code == 404
 
 
 @pytest.mark.django_db

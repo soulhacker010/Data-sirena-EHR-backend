@@ -116,6 +116,19 @@ class BLSSession(OrganizationModel):
         help_text='Set when the client first opens the invite link. Used to enforce one-time claim.',
     )
 
+    # ── Short code (display-friendly alias for the signed token) ──────────────
+    # Six-char Crockford-style code that maps to this session. Lets us share
+    # `/bls/c/AB7K9Q` instead of the 200-char signed token. Generated at
+    # creation time. Resolves to the full token via /sessions/resolve/.
+    short_code = models.CharField(
+        max_length=12,
+        unique=True,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text='Opaque 6-char alias for the signed token. URL-friendly.',
+    )
+
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     status = models.CharField(
         max_length=20,

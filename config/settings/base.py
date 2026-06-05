@@ -165,6 +165,10 @@ REST_FRAMEWORK = {
         # 30/hour leaves headroom for tab-spam and short-lived multi-tab sessions
         # while blunting brute-force scans of leaked refresh tokens.
         'token_refresh': os.getenv('DRF_THROTTLE_TOKEN_REFRESH', '30/hour'),
+        # BLS short-code resolve. 6-char alphabet × 28 symbols = ~481M
+        # combos; 50/min/anon makes brute-force infeasible within the
+        # 4-hour token window.
+        'bls_resolve': os.getenv('DRF_THROTTLE_BLS_RESOLVE', '50/min'),
     },
 }
 

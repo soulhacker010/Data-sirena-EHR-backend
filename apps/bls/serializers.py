@@ -67,6 +67,7 @@ class BLSSessionInviteResponseSerializer(serializers.Serializer):
     """Returned to the therapist after POST /sessions/."""
     session_id = serializers.UUIDField()
     token = serializers.CharField()
+    short_code = serializers.CharField(required=False, allow_null=True)
     invite_url = serializers.CharField()
     expires_in_seconds = serializers.IntegerField()
 

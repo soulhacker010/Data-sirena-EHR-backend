@@ -18,6 +18,7 @@ from .views import (
     BLSClientPreferenceView,
     BLSOrgDefaultsView,
     BLSSessionViewSet,
+    BLSShortCodeResolveView,
     BLSTokenVerifyView,
 )
 
@@ -32,6 +33,7 @@ urlpatterns = [
     # with the ViewSet detail pattern (DRF would otherwise try to treat
     # "verify" as a UUID and 404).
     path('bls/sessions/verify/', BLSTokenVerifyView.as_view(), name='bls-session-verify'),
+    path('bls/sessions/resolve/', BLSShortCodeResolveView.as_view(), name='bls-session-resolve'),
 
     # Authenticated client-context endpoints
     path(

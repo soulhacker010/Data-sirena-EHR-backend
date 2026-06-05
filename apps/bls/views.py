@@ -21,6 +21,7 @@ from rest_framework.decorators import action
 from rest_framework.generics import RetrieveUpdateAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework.viewsets import ViewSet
 
@@ -47,28 +48,32 @@ from .serializers import (
 )
 from .tokens import (
     TOKEN_MAX_AGE_SECONDS,
+    assign_short_code,
     generate_session_token,
     hash_token,
+    resolve_session_from_short_code,
     resolve_session_from_token,
 )
 
 
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
-def _build_invite_url(request, token: str) -> str:
-    """
-    Compose the public client URL for the given token. The frontend host
-    differs from the backend host (Vercel vs Render), so we honour
-    settings.FRONTEND_BASE_URL if set, falling back to the request host.
-    """
+def _frontend_base(request) -> str:
     from django.conf import settings
     base = getattr(settings, 'FRONTEND_BASE_URL', '')
     if not base:
-        # Fall back to the request host — fine for local dev where frontend
-        # and backend share an origin via Vite proxy.
         scheme = 'https' if request.is_secure() else 'http'
         base = f'{scheme}://{request.get_host()}'
-    return f'{base.rstrip("/")}/bls/c/{token}'
+    return base.rstrip('/')
+
+
+def _build_invite_url(request, code_or_token: str) -> str:
+    """
+    Compose the public client URL. Prefer the short code (6 chars) — the
+    frontend resolves it back to the signed token before opening the WS.
+    Falls back to the signed token when no code is provided.
+    """
+    return f'{_frontend_base(request)}/bls/c/{code_or_token}'
 
 
 # ─── Session ViewSet (therapist) ──────────────────────────────────────────────
@@ -126,10 +131,15 @@ class BLSSessionViewSet(PHIAccessAuditMixin, ViewSet):
         session.token_hash = hash_token(token)
         session.save(update_fields=['token_hash', 'updated_at'])
 
-        invite_url = _build_invite_url(request, token)
+        # Also assign a short opaque code (6 chars). The signed token stays
+        # the source of truth; the code is just a display alias.
+        short_code = assign_short_code(session)
+
+        invite_url = _build_invite_url(request, short_code)
         response = BLSSessionInviteResponseSerializer({
             'session_id': session.id,
             'token': token,
+            'short_code': short_code,
             'invite_url': invite_url,
             'expires_in_seconds': TOKEN_MAX_AGE_SECONDS,
         })
@@ -227,6 +237,53 @@ class BLSTokenVerifyView(APIView):
                 'session_id': session.id,
                 'status': session.status,
             }).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class BLSShortCodeResolveThrottle(ScopedRateThrottle):
+    """Tight cap on resolve attempts — defends the short_code space against
+    brute force. 50 attempts/min/anon is well below the math that makes the
+    6-char alphabet exhaustible inside a 4-hour window."""
+    scope = 'bls_resolve'
+
+
+class BLSShortCodeResolveView(APIView):
+    """
+    GET /sessions/resolve/?code=AB7K9Q
+
+    Public — takes a short code and returns the signed token the client
+    page actually needs to open the WebSocket. Rate-limited.
+
+    The response intentionally mirrors the create-session response shape so
+    the frontend can reuse the same downstream logic. NEVER includes PHI.
+    Returns 404 (not 200 with valid=false) so brute-forcers get less signal.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [BLSShortCodeResolveThrottle]
+
+    def get(self, request):
+        code = request.query_params.get('code', '')
+        session = resolve_session_from_short_code(code)
+        if session is None:
+            return Response(
+                {'detail': 'Not found.'},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        # Mint a fresh token. The original token isn't stored (only its
+        # hash is), so we generate a new signed token bound to the same
+        # session id. Update the hash so the new token is recognised.
+        token = generate_session_token(str(session.id))
+        session.token_hash = hash_token(token)
+        session.save(update_fields=['token_hash', 'updated_at'])
+        return Response(
+            {
+                'session_id': session.id,
+                'token': token,
+                'status': session.status,
+                'expires_in_seconds': TOKEN_MAX_AGE_SECONDS,
+            },
             status=status.HTTP_200_OK,
         )
 
