@@ -51,6 +51,37 @@ class LoginRateThrottle(AnonRateThrottle):
     scope = 'login'
 
 
+def revoke_all_refresh_tokens(user) -> int:
+    """
+    Blacklist every outstanding refresh token belonging to `user`.
+
+    Called whenever a password changes or is reset. Without it, a session
+    opened before the change keeps minting fresh access tokens for the rest of
+    the refresh lifetime (7 days) — meaning a password reset, the exact action
+    taken when an account is believed compromised, would not evict the
+    intruder.
+
+    Limitation, stated plainly because it matters for the audit record: access
+    tokens are stateless JWTs and cannot be revoked. One issued moments before
+    the change stays valid until it expires (ACCESS_TOKEN_LIFETIME, 15 min).
+    What this guarantees is that no *new* access token can be minted after the
+    password changes.
+
+    Returns the number of tokens newly blacklisted.
+    """
+    from rest_framework_simplejwt.token_blacklist.models import (
+        BlacklistedToken,
+        OutstandingToken,
+    )
+
+    revoked = 0
+    for token in OutstandingToken.objects.filter(user=user):
+        _, created = BlacklistedToken.objects.get_or_create(token=token)
+        if created:
+            revoked += 1
+    return revoked
+
+
 class LoginView(generics.GenericAPIView):
     """
     POST /api/v1/auth/login/
@@ -129,8 +160,14 @@ class ChangePasswordView(generics.GenericAPIView):
         request.user.set_password(serializer.validated_data['new_password'])
         request.user.save(update_fields=['password'])
 
+        # End every session that was open under the old password.
+        revoked = revoke_all_refresh_tokens(request.user)
+
         from apps.audit.utils import write_audit
-        write_audit(request, 'password_change', 'auth', changes={'user_id': str(request.user.id)})
+        write_audit(request, 'password_change', 'auth', changes={
+            'user_id': str(request.user.id),
+            'sessions_revoked': revoked,
+        })
 
         return Response({'message': 'Password updated successfully'})
 
@@ -397,6 +434,20 @@ class PasswordResetConfirmView(APIView):
 
         user.set_password(new_password)
         user.save(update_fields=['password'])
+
+        # A reset is the remediation for a compromised account — evict any
+        # session already holding a refresh token for this user.
+        revoked = revoke_all_refresh_tokens(user)
+
+        # The actor is unauthenticated here, so AuditLog.user is null by
+        # design: all we can attest is that a valid reset token was presented.
+        # The subject is recorded in `changes` as an opaque id.
+        from apps.audit.utils import write_audit
+        write_audit(request, 'password_reset', 'auth', changes={
+            'user_id': str(user.id),
+            'sessions_revoked': revoked,
+        })
+
         return Response({'message': 'Password reset successfully. You can now sign in.'})
 
 
