@@ -62,6 +62,9 @@ PHI_FIELD_NAMES = frozenset({
     'auth_token', 'api_key', 'secret',
     # Twilio creds
     'twilio_auth_token', 'twilio_account_sid',
+    # Payment card data — never ours to hold, and PCI-toxic in a log
+    'credit_card', 'card_number', 'cvv', 'cvc',
+    'confirm_password',
 })
 
 REDACTED = '***REDACTED***'
@@ -97,6 +100,17 @@ def _scrub_value(value: Any, depth: int = 0) -> Any:
         return cleaned if isinstance(value, list) else tuple(cleaned)
 
     return value
+
+
+def scrub_phi(value: Any) -> Any:
+    """
+    Public entry point for the recursive PHI scrubber.
+
+    Same walk `before_send` uses, exposed so other PHI sinks — the audit log's
+    `changes` payload in particular — police their data with one shared
+    vocabulary instead of maintaining a second list that drifts.
+    """
+    return _scrub_value(value)
 
 
 def _scrub_query_string(qs: str) -> str:

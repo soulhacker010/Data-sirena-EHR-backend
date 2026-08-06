@@ -33,19 +33,35 @@ def _assert_no_phi_in_audit_changes(changes):
     log can still answer "which fields did this user change?" without storing
     the data itself. A PHI key holding a real value is a failure.
     """
+    forbidden = {
+        'first_name', 'last_name', 'name', 'full_name', 'client_name',
+        'date_of_birth', 'dob', 'phone', 'email', 'address',
+        'diagnosis', 'diagnoses', 'mrn',
+        # Clinical narrative — arrives nested under note_data / intake payloads
+        'subjective', 'objective', 'assessment', 'note_content', 'narrative',
+    }
+
+    def _walk(node, path='changes'):
+        """
+        Recurse. Request bodies nest — a session note posts its clinical
+        content under `note_data`, so a top-level-only check would wave the
+        whole narrative through.
+        """
+        if isinstance(node, dict):
+            for k, v in node.items():
+                if isinstance(k, str) and k.lower() in forbidden and v != REDACTED:
+                    raise AssertionError(
+                        f'PHI leaked into audit changes at {path}.{k}: '
+                        f'{v!r} (full payload: {changes})'
+                    )
+                _walk(v, f'{path}.{k}')
+        elif isinstance(node, (list, tuple)):
+            for i, item in enumerate(node):
+                _walk(item, f'{path}[{i}]')
+
     if changes is None:
         return
-    if isinstance(changes, dict):
-        forbidden = {
-            'first_name', 'last_name', 'name', 'full_name', 'client_name',
-            'date_of_birth', 'dob', 'phone', 'email', 'address',
-            'diagnosis', 'diagnoses', 'mrn',
-        }
-        leaked = {
-            k: v for k, v in changes.items()
-            if k.lower() in forbidden and v != REDACTED
-        }
-        assert not leaked, f'PHI leaked into audit changes: {leaked} ({changes})'
+    _walk(changes)
 
 
 # ─── Client retrieve ────────────────────────────────────────────────────────
@@ -186,9 +202,15 @@ class TestAuditPayloadHygieneSweep:
 
         # Note create + sign — exercises the explicit write_audit() calls that
         # previously embedded the patient's name.
+        # Clinical content deliberately nested under note_data — this is the
+        # shape the real frontend posts, and it is where narrative PHI hides.
         note_resp = clinician_client.post('/api/v1/notes/', {
             'client_id': str(sample_client.id),
-            'note_data': {'objectives': 'Audit sweep'},
+            'note_data': {
+                'objectives': 'Audit sweep',
+                'subjective': 'Client reports severe panic episodes since June.',
+                'diagnosis': 'F41.1 Generalized Anxiety Disorder',
+            },
         }, format='json')
         assert note_resp.status_code == status.HTTP_201_CREATED
         clinician_client.post(

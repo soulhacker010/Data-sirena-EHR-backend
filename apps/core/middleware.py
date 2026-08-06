@@ -16,28 +16,24 @@ from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
 
-from apps.core.sentry import PHI_FIELD_NAMES, REDACTED
+from apps.core.sentry import PHI_FIELD_NAMES, scrub_phi
 
-# Keys whose values are stripped before a request body is stored on an audit
-# row. AuditMiddleware snapshots the whole JSON body, so this list is the only
-# thing standing between a patient chart edit and a permanent PHI copy in
-# `audit_logs.changes` — a table that gets exported wholesale for compliance
-# review.
+# AuditMiddleware snapshots the whole JSON request body onto the audit row, so
+# the scrubber below is the only thing standing between a patient chart edit
+# and a permanent PHI copy in `audit_logs.changes` — a table that gets exported
+# wholesale for compliance review.
 #
-# It reuses PHI_FIELD_NAMES (names, DOB, contact details, address, diagnoses,
-# note content, insurance, credentials) rather than maintaining a second
-# vocabulary that silently drifts out of sync with the Sentry scrubber. The
-# earlier local list covered passwords, SSN and DOB but let first_name,
-# last_name, address, phone, diagnosis and every note-content field through.
+# We reuse the Sentry scrubber's vocabulary and its recursive walk rather than
+# maintaining a second list that drifts. Recursion is the important part:
+# request bodies nest (a session note posts its narrative under `note_data`),
+# and a top-level-only pass would wave the entire clinical note through while
+# looking like it was doing its job.
 #
 # Over-inclusive is the safe failure mode: a redacted non-PHI field costs a
 # little debugging context, a leaked PHI field is a disclosure. The audit row
 # still records who / what / when / from where plus the opaque record_id, which
 # is what HIPAA §164.312(b) actually requires.
-SENSITIVE_KEYS = PHI_FIELD_NAMES | {
-    'confirm_password',
-    'credit_card', 'card_number', 'cvv', 'cvc',
-}
+SENSITIVE_KEYS = PHI_FIELD_NAMES  # retained for callers that introspect it
 
 
 class OrganizationMiddleware(MiddlewareMixin):
@@ -126,13 +122,10 @@ class AuditMiddleware(MiddlewareMixin):
                 try:
                     raw = json.loads(body.decode('utf-8'))
                     if raw and isinstance(raw, dict):
-                        # Keep the key, drop the value: the audit row still
-                        # records *which* fields a user changed without
-                        # persisting the PHI itself.
-                        changes = {
-                            k: REDACTED if k.lower() in SENSITIVE_KEYS else v
-                            for k, v in raw.items()
-                        }
+                        # Keep the keys, drop the values, at every depth: the
+                        # audit row still records *which* fields a user changed
+                        # without persisting the PHI itself.
+                        changes = scrub_phi(raw)
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     pass
 
