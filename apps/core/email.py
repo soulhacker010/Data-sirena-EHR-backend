@@ -462,7 +462,10 @@ class EmailService:
     @classmethod
     def send_payment_reminder(cls, invoice, org_name: str = 'Sirena Health'):
         if not invoice.client or not invoice.client.email:
-            logger.warning(f'Invoice {invoice} \u2014 client has no email, skipping reminder')
+            # Log the opaque invoice id, never the model repr \u2014 Invoice.__str__
+            # interpolates Client.__str__ ("Last, First"), which would put a
+            # patient name into stdout / Render logs.
+            logger.warning('Invoice %s \u2014 client has no email, skipping reminder', invoice.id)
             return None
 
         client_name  = _esc(invoice.client.full_name)
@@ -605,7 +608,12 @@ class EmailService:
     @classmethod
     def send_appointment_email(cls, appointment, *, event: str, org_name: str = 'Sirena Health'):
         if not getattr(appointment, 'client', None) or not appointment.client.email:
-            logger.warning(f'Appointment {appointment} \u2014 client has no email, skipping appointment email')
+            # Opaque id only \u2014 Appointment.__str__ interpolates the client,
+            # which would leak a patient name into stdout / Render logs.
+            logger.warning(
+                'Appointment %s \u2014 client has no email, skipping appointment email',
+                appointment.id,
+            )
             return None
 
         client_name   = _esc(appointment.client.full_name)
