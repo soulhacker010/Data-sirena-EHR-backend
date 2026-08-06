@@ -16,13 +16,27 @@ from django.utils.deprecation import MiddlewareMixin
 
 logger = logging.getLogger(__name__)
 
-SENSITIVE_KEYS = {
-    'password', 'password1', 'password2', 'old_password',
-    'new_password', 'confirm_password',
-    'ssn', 'social_security', 'social_security_number',
-    'date_of_birth', 'dob',
+from apps.core.sentry import PHI_FIELD_NAMES, REDACTED
+
+# Keys whose values are stripped before a request body is stored on an audit
+# row. AuditMiddleware snapshots the whole JSON body, so this list is the only
+# thing standing between a patient chart edit and a permanent PHI copy in
+# `audit_logs.changes` — a table that gets exported wholesale for compliance
+# review.
+#
+# It reuses PHI_FIELD_NAMES (names, DOB, contact details, address, diagnoses,
+# note content, insurance, credentials) rather than maintaining a second
+# vocabulary that silently drifts out of sync with the Sentry scrubber. The
+# earlier local list covered passwords, SSN and DOB but let first_name,
+# last_name, address, phone, diagnosis and every note-content field through.
+#
+# Over-inclusive is the safe failure mode: a redacted non-PHI field costs a
+# little debugging context, a leaked PHI field is a disclosure. The audit row
+# still records who / what / when / from where plus the opaque record_id, which
+# is what HIPAA §164.312(b) actually requires.
+SENSITIVE_KEYS = PHI_FIELD_NAMES | {
+    'confirm_password',
     'credit_card', 'card_number', 'cvv', 'cvc',
-    'token', 'secret', 'api_key', 'refresh',
 }
 
 
@@ -112,8 +126,11 @@ class AuditMiddleware(MiddlewareMixin):
                 try:
                     raw = json.loads(body.decode('utf-8'))
                     if raw and isinstance(raw, dict):
+                        # Keep the key, drop the value: the audit row still
+                        # records *which* fields a user changed without
+                        # persisting the PHI itself.
                         changes = {
-                            k: '***REDACTED***' if k.lower() in SENSITIVE_KEYS else v
+                            k: REDACTED if k.lower() in SENSITIVE_KEYS else v
                             for k, v in raw.items()
                         }
                 except (json.JSONDecodeError, UnicodeDecodeError):

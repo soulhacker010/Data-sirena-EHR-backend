@@ -204,10 +204,12 @@ class SessionNoteViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.Mode
         if note.appointment_id:
             try:
                 from apps.audit.utils import write_audit
+                # client_id only — never client_name. The audit log is exported
+                # for compliance review, so storing a patient name here would
+                # re-disclose the PHI the log exists to track.
                 write_audit(self.request, 'session_start', 'notes', record_id=str(note.id), changes={
                     'appointment_id': str(note.appointment_id),
                     'client_id': str(note.client_id),
-                    'client_name': f'{note.client.first_name} {note.client.last_name}',
                     'provider': f'{self.request.user.first_name} {self.request.user.last_name}',
                 })
             except Exception:
@@ -240,9 +242,9 @@ class SessionNoteViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.Mode
                 request.user,
             )
             from apps.audit.utils import write_audit
+            # client_id only — see note in perform_create above.
             write_audit(request, 'sign', 'notes', record_id=str(note.id), changes={
                 'client_id': str(note.client_id),
-                'client_name': f'{note.client.first_name} {note.client.last_name}',
                 'signed_by': f'{request.user.first_name} {request.user.last_name}',
             })
             return Response(SessionNoteSerializer(note).data)
@@ -286,9 +288,9 @@ class SessionNoteViewSet(PHIAccessAuditMixin, AddendumActionMixin, viewsets.Mode
                     request.user,
                 )
             from apps.audit.utils import write_audit
+            # client_id only — see note in perform_create above.
             write_audit(request, 'co_sign', 'notes', record_id=str(note.id), changes={
                 'client_id': str(note.client_id),
-                'client_name': f'{note.client.first_name} {note.client.last_name}',
                 'co_signed_by': f'{request.user.first_name} {request.user.last_name}',
             })
             return Response(SessionNoteSerializer(note).data)
