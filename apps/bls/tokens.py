@@ -23,6 +23,9 @@ Storage:
 
 Expiry:
   * 4 hours via TimestampSigner's `max_age`. Anything older fails verification.
+  * 6 hours from session creation, enforced on every database-aware lookup.
+    Without this the short code would keep minting fresh 4-hour tokens forever
+    (see SESSION_MAX_AGE_SECONDS).
   * Explicit revocation: when `BLSSession.status` flips to ended/abandoned,
     `verify_session_token` rejects even valid-by-signature tokens.
 """
@@ -40,6 +43,19 @@ from django.utils import timezone
 
 TOKEN_SALT = 'apps.bls.tokens.v1'
 TOKEN_MAX_AGE_SECONDS = 4 * 60 * 60   # 4 hours
+
+# Hard ceiling on how long a session stays reachable, measured from creation.
+#
+# The signed token already expires after 4 hours, but that alone did not bound
+# anything: `resolve_session_from_short_code` mints a *fresh* token on every
+# call, so a short code attached to a session nobody explicitly ended would
+# hand out new 4-hour tokens indefinitely. This is the backstop that makes the
+# documented "abandoned (6h timeout)" real (see BLSSessionStatus).
+#
+# It is enforced at read time rather than relying solely on the sweeper task,
+# because the sweeper needs a Celery worker and the check has to hold whether
+# or not one is running.
+SESSION_MAX_AGE_SECONDS = 6 * 60 * 60   # 6 hours
 
 # Crockford Base32 minus the confusable glyphs (I, L, O, U). Six chars from
 # this alphabet yields 28^6 ≈ 481 million combinations — combined with the
@@ -104,6 +120,20 @@ def verify_session_token(token: str) -> Optional[TokenPayload]:
     return TokenPayload(session_id=sid, nonce=nonce)
 
 
+def is_session_expired(session) -> bool:
+    """
+    True once `session` is older than SESSION_MAX_AGE_SECONDS.
+
+    Measured from `created_at`, not `started_at`: a session that was invited
+    but never started still holds a live short code, and that is precisely the
+    case the age ceiling exists to close.
+    """
+    if session is None or session.created_at is None:
+        return False
+    age = (timezone.now() - session.created_at).total_seconds()
+    return age > SESSION_MAX_AGE_SECONDS
+
+
 # ─── Database-aware verification (used by REST + Channels consumer) ───────────
 
 def resolve_session_from_token(token: str):
@@ -128,6 +158,8 @@ def resolve_session_from_token(token: str):
         return None
 
     if session.status in (BLSSessionStatus.ENDED, BLSSessionStatus.ABANDONED):
+        return None
+    if is_session_expired(session):
         return None
     return session
 
@@ -210,6 +242,9 @@ def resolve_session_from_short_code(code: str):
         return None
     if session.status in (BLSSessionStatus.ENDED, BLSSessionStatus.ABANDONED):
         return None
+    # Without this the code would keep minting fresh 4-hour tokens forever.
+    if is_session_expired(session):
+        return None
     return session
 
 
@@ -217,7 +252,9 @@ def resolve_session_from_short_code(code: str):
 __all__ = [
     'TokenPayload',
     'TOKEN_MAX_AGE_SECONDS',
+    'SESSION_MAX_AGE_SECONDS',
     'SHORT_CODE_LENGTH',
+    'is_session_expired',
     'generate_session_token',
     'hash_token',
     'verify_session_token',

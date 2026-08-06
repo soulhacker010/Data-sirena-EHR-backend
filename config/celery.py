@@ -31,6 +31,14 @@ app.conf.beat_schedule = {
         'task': 'apps.messaging.tasks.dispatch_due_reminders',
         'schedule': crontab(minute='*/5'),
     },
+    # Flip BLS sessions nobody explicitly ended to `abandoned` once they age
+    # past the 6-hour ceiling. Hourly is plenty — the resolvers already refuse
+    # expired sessions at read time, so this only keeps the stored status
+    # honest for the admin and the client's chart history.
+    'abandon-stale-bls-sessions': {
+        'task': 'apps.bls.tasks.abandon_stale_sessions',
+        'schedule': crontab(minute=0),
+    },
 }
 
 
