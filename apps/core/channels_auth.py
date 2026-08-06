@@ -21,15 +21,44 @@ from channels.middleware import BaseMiddleware
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import AnonymousUser
 from rest_framework_simplejwt.exceptions import TokenError
-from rest_framework_simplejwt.tokens import UntypedToken
+from rest_framework_simplejwt.tokens import AccessToken
 
 
 @database_sync_to_async
-def _user_from_validated_token(validated_token) -> object:
-    User = get_user_model()
-    user_id = validated_token.get('user_id')
+def _user_from_raw_token(raw_token: str) -> object:
+    """
+    Validate `raw_token` and return the matching active user, else AnonymousUser.
+
+    Two checks beyond signature and expiry:
+
+      1. It must be an ACCESS token. `AccessToken` enforces `token_type`, where
+         the previous `UntypedToken` accepted anything that verified — including
+         a *refresh* token, whose 7-day life and refresh-endpoint-only purpose
+         make it entirely wrong as a socket credential.
+
+      2. Its `jti` must not be blacklisted. Logout blacklists the refresh token,
+         but signature verification alone never consults that list, so a
+         logged-out credential could still open a socket until it expired.
+
+    One indexed lookup per upgrade. WebSocket connects are rare here — roughly
+    one per BLS session — so this is not a hot path.
+    """
+    try:
+        validated = AccessToken(raw_token)
+    except TokenError:
+        return AnonymousUser()
+
+    jti = validated.get('jti')
+    if jti:
+        from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
+        if BlacklistedToken.objects.filter(token__jti=jti).exists():
+            return AnonymousUser()
+
+    user_id = validated.get('user_id')
     if not user_id:
         return AnonymousUser()
+
+    User = get_user_model()
     try:
         user = User.objects.get(pk=user_id)
     except User.DoesNotExist:
@@ -52,14 +81,9 @@ class JWTAuthMiddleware(BaseMiddleware):
         raw_token = (params.get('token') or [None])[0]
 
         if raw_token:
-            try:
-                validated = UntypedToken(raw_token)
-                scope['user'] = await _user_from_validated_token(validated)
-            except TokenError:
-                # Invalid / expired token — fall through with whatever
-                # scope['user'] is currently. Consumer will reject if
-                # auth is required.
-                scope.setdefault('user', AnonymousUser())
+            # Invalid, expired, wrong-type or blacklisted tokens all resolve to
+            # AnonymousUser; the consumer rejects when auth is required.
+            scope['user'] = await _user_from_raw_token(raw_token)
         else:
             scope.setdefault('user', AnonymousUser())
 

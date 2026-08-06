@@ -269,6 +269,72 @@ async def test_therapist_rejected_without_jwt(org, sample_client, clinician_user
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
+async def test_therapist_rejected_with_refresh_token(org, sample_client, clinician_user):
+    """
+    A *refresh* token must not authenticate a WebSocket (GAP-3).
+
+    Refresh tokens live 7 days against an access token's 15 minutes, and their
+    only legitimate use is the token-refresh endpoint. Accepting one here would
+    hand a week-long WebSocket credential to anyone who captured it — and,
+    because a blacklisted refresh token still verifies by signature, would keep
+    working after the user logged out.
+    """
+    from asgiref.sync import sync_to_async
+    from rest_framework_simplejwt.tokens import RefreshToken
+
+    session, _ = await sync_to_async(_create_session)(org, sample_client, clinician_user)
+    refresh = await sync_to_async(lambda: str(RefreshToken.for_user(clinician_user)))()
+
+    comm = WebsocketCommunicator(
+        bls_application_with_auth,
+        f'/ws/bls/therapist/{session.id}/?token={refresh}',
+    )
+    connected, code = await comm.connect()
+    assert not connected, 'a refresh token must never authenticate a WebSocket'
+    assert code == 4401
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+async def test_therapist_rejected_with_blacklisted_token(org, sample_client, clinician_user):
+    """
+    A token whose jti has been blacklisted (i.e. the user logged out) must not
+    authenticate a WebSocket, even if its signature and expiry still check out.
+    """
+    from asgiref.sync import sync_to_async
+    from rest_framework_simplejwt.tokens import RefreshToken
+
+    session, _ = await sync_to_async(_create_session)(org, sample_client, clinician_user)
+
+    def _blacklisted_access_token():
+        refresh = RefreshToken.for_user(clinician_user)
+        access = refresh.access_token
+        # Mirror what logout does, then point the access token at the same jti
+        # so the middleware's blacklist lookup has something to find.
+        from rest_framework_simplejwt.token_blacklist.models import (
+            BlacklistedToken,
+            OutstandingToken,
+        )
+        refresh.blacklist()
+        outstanding = OutstandingToken.objects.filter(user=clinician_user).first()
+        assert outstanding is not None
+        assert BlacklistedToken.objects.filter(token=outstanding).exists()
+        access['jti'] = outstanding.jti
+        return str(access)
+
+    token = await sync_to_async(_blacklisted_access_token)()
+
+    comm = WebsocketCommunicator(
+        bls_application_with_auth,
+        f'/ws/bls/therapist/{session.id}/?token={token}',
+    )
+    connected, code = await comm.connect()
+    assert not connected, 'a blacklisted token must not authenticate a WebSocket'
+    assert code == 4401
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_therapist_rejected_with_garbage_jwt(org, sample_client, clinician_user):
     """A malformed token in the query string falls through to AnonymousUser."""
     from asgiref.sync import sync_to_async
