@@ -587,22 +587,34 @@ class ClaimViewSet(PHIAccessAuditMixin, viewsets.ModelViewSet):
         finally:
             log.save()
 
-        if claim.status == 'denied':
-            claim.resubmission_count += 1
-            claim.status = 'resubmitted'
-            notes = request.data.get('resubmission_notes', '')
-            if notes:
-                claim.resubmission_notes = notes
-        else:
-            claim.status = 'submitted'
+        # Only advance the claim's status when the file actually reached Office
+        # Ally. Previously this ran unconditionally, so an SFTP failure still
+        # left the claim reading "submitted" with a submitted_at timestamp —
+        # the clinician saw a filed claim, the payer never received anything,
+        # and nobody would look again until the timely-filing window had
+        # closed. "Submitted" must mean submitted.
+        #
+        # The generated X12 and filename are saved either way: the work is
+        # real and worth keeping, and it lets a retry reuse it.
+        uploaded = upload_status == 'uploaded'
+        saved_fields = ['oa_file_id', 'x12_837_raw', 'updated_at']
 
-        claim.submitted_at = now
+        if uploaded:
+            if claim.status == 'denied':
+                claim.resubmission_count += 1
+                claim.status = 'resubmitted'
+                notes = request.data.get('resubmission_notes', '')
+                if notes:
+                    claim.resubmission_notes = notes
+                saved_fields += ['resubmission_count', 'resubmission_notes']
+            else:
+                claim.status = 'submitted'
+            claim.submitted_at = now
+            saved_fields += ['status', 'submitted_at']
+
         claim.oa_file_id = filename
         claim.x12_837_raw = x12_content
-        claim.save(update_fields=[
-            'status', 'submitted_at', 'resubmission_count',
-            'resubmission_notes', 'oa_file_id', 'x12_837_raw', 'updated_at',
-        ])
+        claim.save(update_fields=saved_fields)
 
         return Response({
             **ClaimSerializer(claim).data,
